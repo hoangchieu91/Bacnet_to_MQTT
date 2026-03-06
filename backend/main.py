@@ -1,0 +1,900 @@
+"""FastAPI application — REST API + WebSocket + static file serving."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from backend.bacnet_service import BacnetService
+from backend.config_manager import ConfigManager
+from backend.gateway_engine import GatewayEngine
+from backend.history_store import HistoryStore
+from backend.scheduler_service import SchedulerService
+from backend.models import (
+    AlarmConfig,
+    BacnetConfig,
+    ChartConfig,
+    DiscoveryRequest,
+    GroupConfig,
+    MqttConfig,
+    MqttTestRequest,
+    PointMapping,
+    ReleaseRequest,
+    ScheduleEntry,
+    StatusResponse,
+    WriteRequest,
+)
+from backend.mqtt_service import MqttService
+from backend.websocket_manager import WebSocketManager
+from backend.health_monitor import get_system_health, check_ram_for_new_points
+
+# ── Logging setup ──────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+# ── Shared instances ───────────────────────────
+config_manager = ConfigManager()
+ws_manager = WebSocketManager()
+
+# These are initialised in lifespan
+bacnet_service: BacnetService | None = None
+mqtt_service: MqttService | None = None
+gateway_engine: GatewayEngine | None = None
+history_store: HistoryStore | None = None
+scheduler_service: SchedulerService | None = None
+
+
+# ── Lifespan (startup / shutdown) ──────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service
+
+    # Load config
+    cfg = config_manager.load()
+
+    # Initialise history store
+    history_store = HistoryStore()
+    history_store.init()
+
+    # Initialise services
+    bacnet_service = BacnetService(cfg.bacnet)
+    mqtt_service = MqttService(cfg.mqtt)
+    gateway_engine = GatewayEngine(
+        config_manager, bacnet_service, mqtt_service, ws_manager,
+        history_store=history_store,
+    )
+
+    # Start MQTT (fire and forget — broker may not be reachable yet)
+    try:
+        mqtt_service.start()
+    except Exception as exc:
+        logger.warning("MQTT start deferred: %s", exc)
+
+    # Start history cleanup loop
+    asyncio.create_task(history_store.start_cleanup_loop(interval_minutes=60))
+
+    # Auto-start gateway (BACnet + polling) in background
+    asyncio.create_task(_auto_start_gateway())
+
+    # Start scheduler
+    scheduler_service = SchedulerService(config_manager, bacnet_service, history_store)
+    scheduler_service.start()
+
+    logger.info("Gateway application ready.")
+    yield
+
+    # Shutdown
+    if gateway_engine:
+        await gateway_engine.stop()
+    if scheduler_service:
+        scheduler_service.stop()
+    if mqtt_service:
+        mqtt_service.stop()
+    if bacnet_service:
+        await bacnet_service.stop()
+    if history_store:
+        history_store.close()
+    logger.info("Gateway application shut down.")
+
+
+async def _auto_start_gateway():
+    """Background task: auto-connect BACnet and start gateway on boot."""
+    global bacnet_service, gateway_engine
+
+    # Wait for app to be fully ready
+    await asyncio.sleep(3)
+
+    if not bacnet_service or not gateway_engine:
+        logger.warning("[Auto-Start] Services not initialised, skipping.")
+        return
+
+    # Check if there are mappings to run
+    mappings = config_manager.mappings
+    if not mappings:
+        logger.info("[Auto-Start] No mappings configured — skipping gateway start.")
+        return
+
+    logger.info("[Auto-Start] Found %d mappings — starting gateway automatically…", len(mappings))
+
+    # Step 1: Connect BACnet
+    try:
+        if not bacnet_service.connected:
+            logger.info("[Auto-Start] Connecting BACnet (IP=%s, mask=%s, port=%d)…",
+                        config_manager.config.bacnet.ip,
+                        config_manager.config.bacnet.mask,
+                        config_manager.config.bacnet.port)
+            await bacnet_service.start()
+            logger.info("[Auto-Start] ✅ BACnet connected.")
+        else:
+            logger.info("[Auto-Start] BACnet already connected.")
+    except Exception as exc:
+        logger.error("[Auto-Start] ❌ BACnet connection failed: %s — will retry in 30s", exc)
+        await asyncio.sleep(30)
+        try:
+            await bacnet_service.start()
+            logger.info("[Auto-Start] ✅ BACnet connected on retry.")
+        except Exception as exc2:
+            logger.error("[Auto-Start] ❌ BACnet retry failed: %s — gateway NOT started. "
+                         "Use the UI to connect manually.", exc2)
+            return
+
+    # Step 2: Discover devices referenced in mappings (WHO-IS)
+    device_ids = list(set(m.device_id for m in mappings))
+    logger.info("[Auto-Start] Discovering %d device(s): %s", len(device_ids), device_ids)
+    try:
+        # Use full broadcast — BAC0 specific WHO-IS often times out on first boot
+        await bacnet_service.discover_devices(scan_mode="full", timeout=10)
+        await asyncio.sleep(2)
+        found = len(bacnet_service._devices)
+        logger.info("[Auto-Start] Discovery round 1: found %d device(s).", found)
+
+        # Retry if no devices found
+        if found == 0:
+            logger.info("[Auto-Start] Retrying discovery with longer timeout…")
+            await asyncio.sleep(3)
+            await bacnet_service.discover_devices(scan_mode="full", timeout=15)
+            await asyncio.sleep(3)
+            found = len(bacnet_service._devices)
+            logger.info("[Auto-Start] Discovery round 2: found %d device(s).", found)
+    except Exception as exc:
+        logger.warning("[Auto-Start] Device discovery error: %s — proceeding anyway", exc)
+
+    # Step 3: Start gateway engine (polling + MQTT commands)
+    try:
+        await gateway_engine.start()
+        logger.info("[Auto-Start] ✅ Gateway started — polling %d mappings.", len(mappings))
+    except Exception as exc:
+        logger.error("[Auto-Start] ❌ Gateway start failed: %s", exc)
+
+
+# ── FastAPI app ────────────────────────────────
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+
+app = FastAPI(
+    title="BACnet-MQTT Gateway",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Static frontend serving ───────────────────
+@app.get("/")
+async def serve_index():
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+# Mount static assets AFTER the root route
+app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
+app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
+
+
+# ═══════════════════════════════════════════════
+# REST API — Status
+# ═══════════════════════════════════════════════
+@app.get("/api/status", response_model=StatusResponse)
+async def get_status():
+    return StatusResponse(
+        gateway=gateway_engine.status if gateway_engine else "stopped",
+        bacnet_connected=bacnet_service.connected if bacnet_service else False,
+        mqtt_connected=mqtt_service.connected if mqtt_service else False,
+        active_mappings=len([m for m in config_manager.mappings if m.enabled]),
+        discovered_devices=len(bacnet_service._devices) if bacnet_service else 0,
+        uptime_seconds=gateway_engine.uptime if gateway_engine else 0,
+    )
+
+
+@app.get("/api/health")
+async def get_health():
+    return get_system_health()
+
+
+# ═══════════════════════════════════════════════
+# REST API — Gateway Control
+# ═══════════════════════════════════════════════
+@app.post("/api/gateway/start")
+async def start_gateway():
+    if not bacnet_service or not gateway_engine:
+        return JSONResponse({"error": "Services not initialised"}, status_code=500)
+    try:
+        if not bacnet_service.connected:
+            await bacnet_service.start()
+        await gateway_engine.start()
+        return {"status": "started"}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/gateway/stop")
+async def stop_gateway():
+    if gateway_engine:
+        await gateway_engine.stop()
+    return {"status": "stopped"}
+
+# ═══════════════════════════════════════════════
+# REST API — BACnet Config
+# ═══════════════════════════════════════════════
+@app.get("/api/bacnet/config")
+async def get_bacnet_config():
+    return config_manager.config.bacnet.model_dump()
+
+
+@app.put("/api/bacnet/config")
+async def update_bacnet_config(cfg: BacnetConfig):
+    """Update BACnet config (IP, mask, port). Takes effect on next Discover."""
+    config_manager.config.bacnet = cfg
+    config_manager.save()
+    return {"status": "updated", "message": f"BACnet config saved: {cfg.ip}/{cfg.mask}. Click Discover to apply."}
+
+
+@app.get("/api/bacnet/interfaces")
+async def list_network_interfaces():
+    """List available network interfaces with IPs."""
+    import subprocess, json as _json
+    interfaces = []
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "-j", "addr", "show"],
+            capture_output=True, text=True, timeout=5,
+        )
+        data = _json.loads(result.stdout)
+        for iface in data:
+            name = iface.get("ifname", "")
+            state = iface.get("operstate", "UNKNOWN")
+            for addr in iface.get("addr_info", []):
+                ip = addr.get("local", "")
+                prefix = str(addr.get("prefixlen", "24"))
+                if ip and not ip.startswith("127."):
+                    interfaces.append({"interface": name, "ip": ip, "mask": prefix, "state": state})
+    except Exception as exc:
+        logger.warning("Could not list interfaces: %s", exc)
+    return {"interfaces": interfaces}
+
+
+# ═══════════════════════════════════════════════
+# REST API — BACnet Discovery & Read/Write
+# ═══════════════════════════════════════════════
+@app.post("/api/bacnet/discover")
+async def discover_devices(req: DiscoveryRequest | None = None):
+    global bacnet_service
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    try:
+        # Start BACnet if not connected yet
+        if not bacnet_service.connected:
+            # Stop any stale instance first
+            await bacnet_service.stop()
+            import asyncio
+            await asyncio.sleep(1)
+
+            # Rebuild with latest config
+            bacnet_service = BacnetService(config_manager.config.bacnet)
+            if gateway_engine:
+                gateway_engine._bacnet = bacnet_service
+
+            await bacnet_service.start()
+
+        # Run discovery with scan mode parameters
+        timeout = req.timeout if req else 10
+        scan_mode = req.scan_mode if req else "full"
+        devices = await bacnet_service.discover_devices(
+            timeout=timeout,
+            scan_mode=scan_mode,
+            low_id=req.low_id if req else None,
+            high_id=req.high_id if req else None,
+            device_id=req.device_id if req else None,
+        )
+        return {"devices": [d.model_dump() for d in devices], "scan_mode": scan_mode}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.get("/api/bacnet/devices")
+async def list_devices():
+    if not bacnet_service:
+        return {"devices": []}
+    return {"devices": [d.model_dump() for d in bacnet_service.discovered_devices]}
+
+
+@app.get("/api/bacnet/configured-devices")
+async def configured_devices():
+    """Return devices referenced in mappings with online/offline status."""
+    mappings = config_manager.mappings
+    device_map: dict[int, dict] = {}
+    for m in mappings:
+        dev = device_map.setdefault(m.device_id, {
+            "device_id": m.device_id,
+            "point_count": 0,
+            "online": False,
+            "address": None,
+            "last_updated": None,
+            "fail_count": 0,
+        })
+        dev["point_count"] += 1
+        if m.last_updated and (not dev["last_updated"] or m.last_updated > dev["last_updated"]):
+            dev["last_updated"] = m.last_updated
+
+    # Use real-time status from gateway engine if available
+    if gateway_engine:
+        rt_status = gateway_engine.get_device_status()
+        for dev_id, info in device_map.items():
+            if dev_id in rt_status:
+                st = rt_status[dev_id]
+                info["online"] = st["online"]
+                info["address"] = st.get("address")
+                info["fail_count"] = st.get("fail_count", 0)
+                info["last_seen"] = st.get("last_seen")
+            elif bacnet_service:
+                addr = bacnet_service.get_device_address(dev_id)
+                if addr:
+                    info["address"] = addr
+    elif bacnet_service:
+        for dev_id, info in device_map.items():
+            addr = bacnet_service.get_device_address(dev_id)
+            if addr:
+                info["online"] = True
+                info["address"] = addr
+
+    return {"devices": list(device_map.values())}
+
+
+@app.get("/api/events")
+async def get_events(
+    event_type: str | None = None,
+    device_id: int | None = None,
+    severity: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+):
+    """Query event log with optional filters."""
+    if not history_store:
+        return {"events": [], "total": 0}
+    events = history_store.query_events(
+        event_type=event_type, device_id=device_id,
+        severity=severity, limit=limit, offset=offset,
+    )
+    return {"events": events}
+
+
+@app.get("/api/bacnet/devices/{device_id}/objects")
+async def list_objects(device_id: int):
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    address = bacnet_service.get_device_address(device_id)
+    if not address:
+        return JSONResponse({"error": f"Device {device_id} not found"}, status_code=404)
+    objects = await bacnet_service.read_object_list(address, device_id)
+    return {"objects": [o.model_dump() for o in objects]}
+
+
+@app.post("/api/bacnet/write")
+async def write_bacnet(req: WriteRequest):
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    address = bacnet_service.get_device_address(req.device_id)
+    if not address:
+        return JSONResponse({"error": f"Device {req.device_id} not found"}, status_code=404)
+    ok, err = await bacnet_service.write_object(
+        address, req.object_type, req.object_instance, req.value, req.priority
+    )
+    if ok:
+        return {"success": True, "priority": req.priority}
+    return JSONResponse({"success": False, "error": err or "Write rejected by device"}, status_code=200)
+
+
+@app.post("/api/bacnet/release")
+async def release_bacnet(req: ReleaseRequest):
+    """Release (null) a single priority or all priorities 1–16."""
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    address = bacnet_service.get_device_address(req.device_id)
+    if not address:
+        return JSONResponse({"error": f"Device {req.device_id} not found"}, status_code=404)
+
+    if str(req.priority).lower() == "all":
+        results = await bacnet_service.release_all_priorities(
+            address, req.object_type, req.object_instance
+        )
+        success_count = sum(1 for v in results.values() if v)
+        return {"success": True, "released": success_count, "total": 16, "results": results}
+    else:
+        pri = int(req.priority)
+        ok = await bacnet_service.release_priority(
+            address, req.object_type, req.object_instance, pri
+        )
+        return {"success": ok, "priority": pri}
+
+
+@app.get("/api/bacnet/priority_array/{device_id}/{object_type}/{object_instance}")
+async def read_priority_array(device_id: int, object_type: str, object_instance: int):
+    """Read the 16-level priority array of a BACnet object."""
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    address = bacnet_service.get_device_address(device_id)
+    if not address:
+        return JSONResponse({"error": f"Device {device_id} not found"}, status_code=404)
+    pa = await bacnet_service.read_priority_array(address, object_type, object_instance)
+    pv = await bacnet_service.read_object(address, object_type, object_instance)
+    return {"present_value": pv, "priority_array": pa}
+
+
+# ═══════════════════════════════════════════════
+# REST API — MQTT
+# ═══════════════════════════════════════════════
+@app.get("/api/mqtt/config")
+async def get_mqtt_config():
+    return config_manager.config.mqtt.model_dump()
+
+
+@app.put("/api/mqtt/config")
+async def update_mqtt_config(cfg: MqttConfig):
+    config_manager.update_mqtt(**cfg.model_dump())
+    if mqtt_service:
+        mqtt_service.update_config(cfg)
+    return {"status": "updated"}
+
+
+@app.post("/api/mqtt/test")
+async def test_mqtt(req: MqttTestRequest):
+    result = MqttService.test_connection(
+        host=req.broker_host,
+        port=req.broker_port,
+        username=req.username,
+        password=req.password,
+        use_tls=req.use_tls,
+    )
+    return result
+
+
+# ═══════════════════════════════════════════════
+# REST API — Groups
+# ═══════════════════════════════════════════════
+@app.get("/api/groups")
+async def list_groups():
+    return {"groups": [g.model_dump() for g in config_manager.groups]}
+
+
+@app.post("/api/groups")
+async def create_group(group: GroupConfig):
+    added = config_manager.add_group(group)
+    return added.model_dump()
+
+
+@app.put("/api/groups/{group_id}")
+async def update_group(group_id: str, group: dict[str, Any]):
+    updated = config_manager.update_group(group_id, **group)
+    if not updated:
+        return JSONResponse({"error": "Group not found"}, status_code=404)
+    return updated.model_dump()
+
+
+@app.delete("/api/groups/{group_id}")
+async def delete_group(group_id: str):
+    removed = config_manager.remove_group(group_id)
+    if not removed:
+        return JSONResponse({"error": "Group not found"}, status_code=404)
+    return {"status": "deleted"}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Schedules
+# ═══════════════════════════════════════════════
+@app.get("/api/schedules")
+async def list_schedules():
+    return {"schedules": [s.model_dump() for s in config_manager.schedules]}
+
+
+@app.post("/api/schedules")
+async def create_schedule(sched: ScheduleEntry):
+    added = config_manager.add_schedule(sched)
+    return added.model_dump()
+
+
+@app.put("/api/schedules/{sched_id}")
+async def update_schedule(sched_id: str, body: dict[str, Any]):
+    updated = config_manager.update_schedule(sched_id, **body)
+    if not updated:
+        return JSONResponse({"error": "Schedule not found"}, status_code=404)
+    return updated.model_dump()
+
+
+@app.delete("/api/schedules/{sched_id}")
+async def delete_schedule(sched_id: str):
+    removed = config_manager.remove_schedule(sched_id)
+    if not removed:
+        return JSONResponse({"error": "Schedule not found"}, status_code=404)
+    return {"status": "deleted"}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Mappings
+# ═══════════════════════════════════════════════
+@app.get("/api/mappings")
+async def list_mappings():
+    return {"mappings": [m.model_dump() for m in config_manager.mappings]}
+
+
+@app.post("/api/mappings")
+async def create_mapping(mapping: PointMapping):
+    ram_check = check_ram_for_new_points(1)
+    created = config_manager.add_mapping(mapping)
+    result = {"mapping": created.model_dump()}
+    if ram_check.get("warning"):
+        result["ram_warning"] = ram_check["warning"]
+        result["ram_percent"] = ram_check["ram_percent"]
+        result["ram_status"] = ram_check["ram_status"]
+    return result
+
+
+@app.post("/api/mappings/bulk")
+async def create_mappings_bulk(body: dict[str, Any]):
+    """Bulk-create multiple mappings at once. Body: {mappings: [...]}"""
+    items = body.get("mappings", [])
+    ram_check = check_ram_for_new_points(len(items))
+    if not ram_check["allowed"]:
+        return JSONResponse(
+            {"error": ram_check["warning"], "ram_percent": ram_check["ram_percent"],
+             "ram_status": ram_check["ram_status"]},
+            status_code=429,
+        )
+    created = []
+    for m in items:
+        try:
+            mapping = PointMapping(**m)
+            result = config_manager.add_mapping(mapping)
+            created.append(result.model_dump())
+        except Exception as exc:
+            logger.warning("Bulk map skip: %s", exc)
+    resp = {"created": len(created), "mappings": created}
+    if ram_check.get("warning"):
+        resp["ram_warning"] = ram_check["warning"]
+        resp["ram_percent"] = ram_check["ram_percent"]
+    return resp
+
+
+@app.put("/api/mappings/{mapping_id}")
+async def update_mapping(mapping_id: str, body: dict[str, Any]):
+    updated = config_manager.update_mapping(mapping_id, **body)
+    if not updated:
+        return JSONResponse({"error": "Mapping not found"}, status_code=404)
+    return {"mapping": updated.model_dump()}
+
+
+@app.delete("/api/mappings/{mapping_id}")
+async def delete_mapping(mapping_id: str):
+    removed = config_manager.remove_mapping(mapping_id)
+    if not removed:
+        return JSONResponse({"error": "Mapping not found"}, status_code=404)
+    return {"status": "deleted"}
+
+
+@app.put("/api/mappings/{mapping_id}/alarm")
+async def update_alarm_config(mapping_id: str, body: dict[str, Any]):
+    """Set alarm thresholds for a specific mapping."""
+    m = config_manager.get_mapping(mapping_id)
+    if not m:
+        return JSONResponse({"error": "Mapping not found"}, status_code=404)
+    try:
+        alarm_cfg = AlarmConfig(**body)
+        config_manager.update_mapping(mapping_id, alarm_config=alarm_cfg.model_dump())
+        return {"status": "ok", "alarm_config": alarm_cfg.model_dump()}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+
+
+# ── Export / Import Mappings ──────────────────
+@app.get("/api/mappings/export")
+async def export_mappings():
+    """Export all mappings as JSON array."""
+    return {"mappings": [m.model_dump() for m in config_manager.mappings]}
+
+
+@app.post("/api/mappings/import")
+async def import_mappings(body: dict[str, Any]):
+    """Import mappings with ID-based upsert.
+    New IDs → add, existing IDs → update."""
+    incoming = body.get("mappings", [])
+    if not incoming:
+        return JSONResponse({"error": "No mappings provided"}, status_code=400)
+
+    added, updated, errors = 0, 0, 0
+    for item in incoming:
+        try:
+            mid = item.get("id", "")
+            existing = config_manager.get_mapping(mid) if mid else None
+            if existing:
+                # Update existing
+                for k, v in item.items():
+                    if k != "id" and hasattr(existing, k):
+                        setattr(existing, k, v)
+                updated += 1
+            else:
+                # Create new
+                from backend.models import PointMapping
+                m = PointMapping(**{k: v for k, v in item.items()
+                                   if k in PointMapping.model_fields})
+                if mid:
+                    m.id = mid
+                config_manager.add_mapping(m)
+                added += 1
+        except Exception as exc:
+            logger.warning("Import error for item: %s", exc)
+            errors += 1
+
+    config_manager.save()
+    return {"added": added, "updated": updated, "errors": errors,
+            "total": len(config_manager.mappings)}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Reports Export
+# ═══════════════════════════════════════════════
+@app.get("/api/reports/export")
+async def export_report(
+    format: str = "csv",
+    start: str | None = None,
+    end: str | None = None,
+    point_ids: str | None = None,
+    group: str | None = None,
+):
+    """Export point history as CSV or JSON.
+    - format: csv | json
+    - point_ids: comma-separated mapping IDs
+    - group: filter by group name
+    """
+    if not history_store:
+        return JSONResponse({"error": "History store not available"}, status_code=500)
+
+    # Resolve point IDs
+    ids = None
+    if point_ids:
+        ids = [x.strip() for x in point_ids.split(",") if x.strip()]
+    elif group:
+        ids = [m.id for m in config_manager.mappings if m.group == group]
+
+    data = history_store.export_range(mapping_ids=ids, start=start, end=end)
+
+    # Build label lookup
+    label_map = {m.id: (m.label or f"{m.object_type}:{m.object_instance}") for m in config_manager.mappings}
+
+    if format == "csv":
+        import csv
+        import io
+        from starlette.responses import StreamingResponse
+
+        def generate():
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["Timestamp", "Point ID", "Label", "Value"])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            for row in data:
+                writer.writerow([
+                    row["timestamp"],
+                    row["mapping_id"],
+                    label_map.get(row["mapping_id"], row["mapping_id"]),
+                    row["value"],
+                ])
+                yield output.getvalue()
+                output.seek(0)
+                output.truncate(0)
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=bacnet_report.csv"},
+        )
+    else:
+        # JSON format
+        for row in data:
+            row["label"] = label_map.get(row["mapping_id"], row["mapping_id"])
+        return {"records": data, "count": len(data)}
+
+
+@app.get("/api/mappings/{mapping_id}/properties")
+async def get_mapping_properties(mapping_id: str):
+    """Read extended BACnet properties for a mapping's object."""
+    mapping = config_manager.get_mapping(mapping_id)
+    if not mapping:
+        return JSONResponse({"error": "Mapping not found"}, status_code=404)
+
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, status_code=503)
+
+    # Find device address
+    device = bacnet_service._devices.get(mapping.device_id)
+    if not device:
+        return JSONResponse({"error": f"Device {mapping.device_id} not found. Run discovery first."}, status_code=404)
+
+    address = device.address if hasattr(device, 'address') else device.get("address", "")
+    try:
+        props = await bacnet_service.read_object_properties(
+            address, mapping.object_type, mapping.object_instance
+        )
+        # Save to mapping
+        if props.get("units"):
+            mapping.units = props["units"]
+        if props.get("description"):
+            mapping.description = props["description"]
+        if props.get("state_text"):
+            mapping.state_text = props["state_text"]
+        if props.get("active_text"):
+            mapping.active_text = props["active_text"]
+        if props.get("inactive_text"):
+            mapping.inactive_text = props["inactive_text"]
+        config_manager.save()
+
+        return {"properties": props, "mapping": mapping.model_dump()}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ═══════════════════════════════════════════════
+# REST API — Chart Configuration
+# ═══════════════════════════════════════════════
+@app.get("/api/charts")
+async def get_charts():
+    return {"charts": [c.model_dump() for c in config_manager.charts]}
+
+
+@app.post("/api/charts")
+async def create_chart(chart: ChartConfig):
+    created = config_manager.add_chart(chart)
+    return {"chart": created.model_dump()}
+
+
+@app.put("/api/charts/{chart_id}")
+async def update_chart(chart_id: str, body: dict[str, Any]):
+    updated = config_manager.update_chart(chart_id, **body)
+    if not updated:
+        return JSONResponse({"error": "Chart not found"}, status_code=404)
+    return {"chart": updated.model_dump()}
+
+
+@app.delete("/api/charts/{chart_id}")
+async def delete_chart(chart_id: str):
+    removed = config_manager.remove_chart(chart_id)
+    if not removed:
+        return JSONResponse({"error": "Chart not found"}, status_code=404)
+    return {"status": "deleted"}
+
+# ═══════════════════════════════════════════════
+# REST API — Point History
+# ═══════════════════════════════════════════════
+@app.get("/api/history/stats/overview")
+async def get_history_stats():
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    return history_store.get_stats()
+
+
+@app.get("/api/history/config")
+async def get_history_config():
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    return history_store.get_config()
+
+
+@app.put("/api/history/config")
+async def update_history_config(body: dict[str, Any]):
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    return history_store.update_config(**body)
+
+
+@app.post("/api/history/purge")
+async def purge_history(body: dict[str, Any]):
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    mapping_id = body.get("mapping_id", "")
+    keep_count = body.get("keep_count", 0)
+    if not mapping_id:
+        return JSONResponse({"error": "mapping_id required"}, status_code=400)
+    deleted = history_store.purge_mapping(mapping_id, keep_count)
+    return {"deleted": deleted, "mapping_id": mapping_id}
+
+
+@app.get("/api/history/{mapping_id}")
+async def get_history(mapping_id: str, start: str = None, end: str = None, limit: int = 500):
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    data = history_store.query(mapping_id, start=start, end=end, limit=min(limit, 5000))
+    return {"mapping_id": mapping_id, "count": len(data), "records": data}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Config import / export
+# ═══════════════════════════════════════════════
+@app.get("/api/config/export")
+async def export_config():
+    return config_manager.export_config()
+
+
+@app.post("/api/config/import")
+async def import_config(data: dict[str, Any]):
+    config_manager.import_config(data)
+    return {"status": "imported"}
+
+
+# ═══════════════════════════════════════════════
+# WebSocket — real-time data stream
+# ═══════════════════════════════════════════════
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        while True:
+            # Keep connection alive; handle client messages if needed
+            data = await ws.receive_text()
+            # Could handle commands from the UI here
+            logger.debug("WS received: %s", data)
+    except WebSocketDisconnect:
+        await ws_manager.disconnect(ws)
+    except Exception:
+        await ws_manager.disconnect(ws)
+
+
+# ═══════════════════════════════════════════════
+# Logs endpoint (returns last N log lines)
+# ═══════════════════════════════════════════════
+_log_buffer: list[str] = []
+_MAX_LOG_LINES = 500
+
+
+class BufferHandler(logging.Handler):
+    """In-memory ring-buffer log handler for the web UI."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        _log_buffer.append(msg)
+        if len(_log_buffer) > _MAX_LOG_LINES:
+            _log_buffer.pop(0)
+
+
+_buf_handler = BufferHandler()
+_buf_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+logging.getLogger().addHandler(_buf_handler)
+
+
+@app.get("/api/logs")
+async def get_logs(lines: int = 100):
+    return {"logs": _log_buffer[-lines:]}

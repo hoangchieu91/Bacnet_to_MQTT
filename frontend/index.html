@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BACnet-MQTT Gateway</title>
+  <meta name="description" content="BACnet to MQTT Gateway — Real-time building automation monitoring and control" />
+  <link rel="stylesheet" href="/css/style.css?v=4" />
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3/dist/apexcharts.min.js"></script>
+</head>
+
+<body>
+  <div class="app-layout">
+
+    <!-- ═══ Sidebar ═══ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <div class="logo-icon">⚡</div>
+          <div class="logo-text">
+            <h1>BACnet Gateway</h1>
+            <span>BACnet → MQTT Bridge</span>
+          </div>
+        </div>
+        <button class="sidebar-toggle" onclick="App.toggleSidebar()" title="Toggle sidebar">☰</button>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section-label">Main</div>
+        <div class="nav-item active" data-page="dashboard" id="nav-dashboard">
+          <span class="nav-icon">📊</span> Dashboard
+        </div>
+        <div class="nav-item" data-page="devices" id="nav-devices">
+          <span class="nav-icon">🔌</span> Devices
+        </div>
+        <div class="nav-item" data-page="mappings" id="nav-mappings">
+          <span class="nav-icon">🔗</span> Mappings
+        </div>
+        <div class="nav-item" data-page="groups" id="nav-groups">
+          <span class="nav-icon">📋</span> Groups
+        </div>
+        <div class="nav-item" data-page="charts" id="nav-charts">
+          <span class="nav-icon">📈</span> Charts
+        </div>
+        <div class="nav-item" data-page="logs" id="nav-logs">
+          <span class="nav-icon">📝</span> Logs
+        </div>
+        <div class="nav-item" data-page="scheduler" id="nav-scheduler">
+          <span class="nav-icon">⏰</span> Scheduler
+        </div>
+
+        <div class="nav-section-label">Settings</div>
+        <div class="nav-item" data-page="mqtt" id="nav-mqtt">
+          <span class="nav-icon">📡</span> MQTT Config
+        </div>
+        <div class="nav-item" data-page="system" id="nav-system">
+          <span class="nav-icon">⚙️</span> System
+        </div>
+        <div style="padding:8px 10px;margin-top:4px">
+          <button class="sidebar-toggle" onclick="App.toggleTheme()" id="theme-toggle"
+            style="width:100%;text-align:left;font-size:0.78rem;padding:6px 8px" title="Toggle theme">🌙 Dark
+            Mode</button>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator">
+          <span class="status-dot" id="status-dot-bacnet"></span>
+          <span>BACnet: <span id="status-text-bacnet">Disconnected</span></span>
+        </div>
+        <div class="status-indicator" style="margin-top:6px">
+          <span class="status-dot" id="status-dot-mqtt"></span>
+          <span>MQTT: <span id="status-text-mqtt">Disconnected</span></span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ═══ Main Content ═══ -->
+    <main class="main-content">
+
+      <!-- ═══ DASHBOARD PAGE ═══ -->
+      <div class="page active" id="page-dashboard">
+        <div class="top-bar">
+          <h2 class="page-title">Dashboard</h2>
+          <div class="top-actions">
+            <button class="btn btn-primary" id="btn-start-gateway" onclick="App.toggleGateway()">
+              ▶ Start Gateway
+            </button>
+          </div>
+        </div>
+
+        <div class="stats-grid" id="dashboard-stats">
+          <div class="stat-card">
+            <div class="stat-label">Gateway Status</div>
+            <div class="stat-value" id="stat-gateway-status">STOPPED</div>
+            <div class="stat-detail" id="stat-uptime">Uptime: —</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Active Mappings</div>
+            <div class="stat-value" id="stat-active-mappings">0</div>
+            <div class="stat-detail">Points being polled</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">BACnet Devices</div>
+            <div class="stat-value" id="stat-bacnet-devices">0</div>
+            <div class="stat-detail" id="stat-bacnet-detail">Disconnected</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">MQTT Messages</div>
+            <div class="stat-value" id="stat-mqtt-messages">0</div>
+            <div class="stat-detail" id="stat-mqtt-detail">Disconnected</div>
+          </div>
+        </div>
+
+        <!-- Pi Health Card -->
+        <div class="card section" id="pi-health-card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🖥️ Pi Health</div>
+              <div class="card-subtitle" id="health-subtitle">Loading…</div>
+            </div>
+            <span class="badge" id="health-ram-badge">—</span>
+          </div>
+          <div class="grid-4" style="gap:16px">
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
+                <span>CPU</span><span id="health-cpu-pct">—</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="health-cpu-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
+                <span>RAM</span><span id="health-ram-pct">—</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="health-ram-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
+                <span>Disk</span><span id="health-disk-pct">—</span>
+              </div>
+              <div class="progress-bar">
+                <div class="progress-fill" id="health-disk-bar" style="width:0%"></div>
+              </div>
+            </div>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
+                <span>🌡️ CPU Temp</span><span id="health-temp">—</span>
+              </div>
+              <div style="font-size:1.3rem;font-weight:700;color:var(--accent-primary)" id="health-temp-big">—</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Group Summary Cards -->
+        <div id="group-summary-container" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+          <!-- Populated dynamically by dashboard.js -->
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Live Values</div>
+                <div class="card-subtitle">Real-time BACnet point data</div>
+              </div>
+            </div>
+            <div class="chart-container">
+              <div id="liveChart" style="min-height:260px"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">📊 Live Points</div>
+                <div class="card-subtitle" id="live-points-subtitle">All mapped points — real-time values</div>
+              </div>
+            </div>
+            <div style="padding:0 16px 8px">
+              <input type="text" class="form-input" id="live-points-search" placeholder="🔍 Search points…"
+                oninput="Dashboard.filterLivePoints(this.value)" style="padding:6px 12px;font-size:0.85rem" />
+            </div>
+            <div class="table-container" style="max-height:300px;overflow-y:auto">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Point</th>
+                    <th>Value</th>
+                    <th>Mode</th>
+                    <th>Updated</th>
+                  </tr>
+                </thead>
+                <tbody id="live-points-body">
+                  <tr>
+                    <td colspan="4" class="empty-state" style="padding:32px">
+                      <p>No data yet. Start the gateway to begin polling.</p>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ DEVICES PAGE ═══ -->
+      <div class="page" id="page-devices">
+        <div class="top-bar">
+          <h2 class="page-title">BACnet Devices</h2>
+        </div>
+
+        <!-- BACnet Network Config Card -->
+        <div class="card section">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🌐 BACnet Network Interface</div>
+              <div class="card-subtitle">Select the network interface connected to BACnet devices</div>
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="Devices.detectInterfaces()">🔄 Detect Interfaces</button>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Network Interface</label>
+              <select class="form-select" id="bacnet-interface-select" onchange="Devices.onInterfaceSelect(this)">
+                <option value="">— Click Detect to scan —</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">BACnet IP</label>
+              <input type="text" class="form-input" id="bacnet-ip" placeholder="e.g. 10.25.7.21" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Subnet Mask (CIDR)</label>
+              <input type="text" class="form-input" id="bacnet-mask" value="24" placeholder="24" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">BACnet Port</label>
+              <input type="number" class="form-input" id="bacnet-port" value="47808" />
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="Devices.saveBacnetConfig()">💾 Apply BACnet Config</button>
+        </div>
+
+        <!-- Discovery Scan Card -->
+        <div class="card section">
+          <div class="card-header">
+            <div>
+              <div class="card-title">🔍 Device Discovery</div>
+              <div class="card-subtitle">Scan the BACnet network for devices</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Scan Mode</label>
+              <select class="form-select" id="scan-mode" onchange="Devices.onScanModeChange(this.value)">
+                <option value="full">🌐 Full Network Scan</option>
+                <option value="range">📊 Scan by ID Range</option>
+                <option value="specific">🎯 Scan Specific ID</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Timeout (seconds)</label>
+              <input type="number" class="form-input" id="scan-timeout" value="10" min="3" max="60" />
+            </div>
+          </div>
+          <div class="form-row hidden" id="scan-range-row">
+            <div class="form-group">
+              <label class="form-label">Low Device ID</label>
+              <input type="number" class="form-input" id="scan-low-id" value="0" min="0" max="4194303" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">High Device ID</label>
+              <input type="number" class="form-input" id="scan-high-id" value="4194303" min="0" max="4194303" />
+            </div>
+          </div>
+          <div class="form-row hidden" id="scan-specific-row">
+            <div class="form-group">
+              <label class="form-label">Device ID</label>
+              <input type="number" class="form-input" id="scan-device-id" value="" min="0" max="4194303"
+                placeholder="e.g. 2507" />
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <button class="btn btn-primary" id="btn-discover" onclick="Devices.discover()">🔍 Start Scan</button>
+            <span id="scan-status" style="color:var(--text-secondary);font-size:0.9rem"></span>
+          </div>
+        </div>
+
+        <!-- Configured Devices (from mappings) -->
+        <div class="card" style="padding:12px 16px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <h3 style="font-size:0.95rem;font-weight:600;margin:0">📋 Configured Devices</h3>
+            <button class="btn btn-sm btn-secondary" onclick="Devices.refreshConfigured()" style="font-size:0.75rem">🔄
+              Refresh</button>
+          </div>
+          <div id="configured-devices-grid"
+            style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px">
+            <div style="color:var(--text-muted);font-size:0.8rem;padding:8px">Loading...</div>
+          </div>
+        </div>
+
+        <!-- Discovered Devices -->
+        <div id="devices-grid" class="grid-3">
+          <div class="empty-state" style="grid-column:1/-1">
+            <div class="icon">🔌</div>
+            <h3>No devices discovered</h3>
+            <p>Select network interface above, then click "Discover Devices".</p>
+          </div>
+        </div>
+
+        <!-- Auto Map — Device Objects Browser -->
+        <div class="modal-overlay hidden" id="device-objects-modal">
+          <div class="modal" style="min-width:720px;max-width:900px">
+            <div class="modal-header">
+              <div>
+                <h3 class="modal-title" id="modal-device-title">Device Objects</h3>
+                <div style="color:var(--text-secondary);font-size:0.85rem;margin-top:2px" id="modal-device-subtitle">
+                </div>
+              </div>
+              <button class="modal-close" onclick="Devices.closeModal()">&times;</button>
+            </div>
+            <!-- Filter & Controls -->
+            <div style="display:flex;gap:10px;align-items:center;padding:0 24px 12px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.9rem">
+                <input type="checkbox" id="obj-select-all" onchange="Devices.toggleSelectAll(this.checked)" />
+                <strong>Select All</strong>
+              </label>
+              <select class="form-select" id="obj-type-filter" onchange="Devices.filterObjects()"
+                style="width:auto;min-width:160px;padding:6px 10px;font-size:0.85rem">
+                <option value="">All Types</option>
+              </select>
+              <span id="obj-count-info" style="color:var(--text-secondary);font-size:0.85rem;margin-left:auto"></span>
+            </div>
+            <div class="table-container" style="max-height:45vh;overflow-y:auto;padding:0 24px">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:36px">✓</th>
+                    <th>Object Type</th>
+                    <th>Instance</th>
+                    <th>Name</th>
+                  </tr>
+                </thead>
+                <tbody id="modal-objects-body"></tbody>
+              </table>
+            </div>
+            <div
+              style="padding:12px 24px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--border)">
+              <div class="form-group" style="margin:0;flex:0 0 auto">
+                <label class="form-label" style="margin-bottom:2px;font-size:0.8rem">Read Mode</label>
+                <select class="form-select" id="automap-read-mode"
+                  style="width:auto;padding:6px 10px;font-size:0.85rem">
+                  <option value="auto" selected>🤖 Auto (COV→Poll)</option>
+                  <option value="poll">🔄 Poll</option>
+                  <option value="cov">⚡ COV</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin:0;flex:0 0 auto">
+                <label class="form-label" style="margin-bottom:2px;font-size:0.8rem">Poll Interval</label>
+                <input type="number" class="form-input" id="automap-poll-interval" value="10" min="1" max="300"
+                  style="width:80px;padding:6px" />
+              </div>
+              <button class="btn btn-primary" id="btn-map-selected" onclick="Devices.mapSelected()" disabled>
+                📥 Map Selected (<span id="selected-count">0</span>)
+              </button>
+              <button class="btn btn-secondary" onclick="Devices.closeModal()">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ MAPPINGS PAGE ═══ -->
+      <div class="page" id="page-mappings">
+        <div class="top-bar">
+          <h2 class="page-title">Point Mappings</h2>
+          <div class="top-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span id="mapping-count-info" style="color:var(--text-secondary);font-size:0.8rem"></span>
+            <button class="btn btn-sm btn-secondary" onclick="Mapping.loadAllProperties()"
+              title="Load BACnet properties for all points">📡 Load All</button>
+            <button class="btn btn-sm btn-secondary" onclick="Mapping.bulkEditModal()"
+              title="Bulk edit selected points">✏️ Bulk Edit</button>
+            <button class="btn btn-sm btn-secondary" onclick="Mapping.cloneModal()"
+              title="Clone points to another device">📋 Clone</button>
+            <button class="btn btn-sm btn-secondary" onclick="Mapping.exportMappings()" title="Export">📥
+              Export</button>
+            <button class="btn btn-sm btn-secondary" onclick="Mapping.importMappings()" title="Import">📤
+              Import</button>
+            <button class="btn btn-primary btn-sm" onclick="Mapping.openAddModal()">+ Add</button>
+          </div>
+        </div>
+
+        <div class="mappings-layout">
+          <!-- Left: Point List -->
+          <div class="card mapping-list-panel">
+            <div style="padding:6px 8px;border-bottom:1px solid var(--border)">
+              <input type="text" class="form-input" id="mapping-search" placeholder="🔍 Search..."
+                oninput="Mapping.filter(this.value)" style="padding:5px 8px;font-size:0.8rem;margin-bottom:4px" />
+              <div style="display:flex;gap:4px;align-items:center;flex-wrap:wrap">
+                <select class="form-select" id="mapping-type-filter" onchange="Mapping.filter()"
+                  style="flex:1;padding:3px 6px;font-size:0.75rem;min-width:60px">
+                  <option value="">All Types</option>
+                </select>
+                <select class="form-select" id="mapping-group-filter" onchange="Mapping.filter()"
+                  style="flex:1;padding:3px 6px;font-size:0.75rem;min-width:60px">
+                  <option value="">All Groups</option>
+                </select>
+                <select class="form-select" id="mapping-mode-filter" onchange="Mapping.filter()"
+                  style="flex:0 0 auto;padding:3px 6px;font-size:0.75rem;width:60px">
+                  <option value="">All</option>
+                  <option value="poll">🔄</option>
+                  <option value="cov">⚡</option>
+                </select>
+                <label style="font-size:0.7rem;display:flex;align-items:center;gap:3px;cursor:pointer"
+                  title="Select all for bulk edit">
+                  <input type="checkbox" id="mapping-select-all" onchange="Mapping.toggleSelectAll(this.checked)" /> All
+                </label>
+              </div>
+            </div>
+            <div id="mapping-list-container" style="overflow-y:auto;max-height:calc(100vh - 210px)">
+              <div class="empty-state" style="padding:32px">
+                <p>No mappings configured.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Point Detail -->
+          <div class="card mapping-detail-panel" id="mapping-detail-panel">
+            <div class="empty-state" style="padding:48px" id="mapping-detail-empty">
+              <div class="icon">📋</div>
+              <h3>Select a point</h3>
+              <p>Click a point from the list to view details.</p>
+            </div>
+            <div id="mapping-detail-content" class="hidden">
+              <div style="padding:10px 14px;border-bottom:1px solid var(--border)">
+                <div style="display:flex;justify-content:space-between;align-items:start">
+                  <div style="min-width:0;flex:1">
+                    <div class="card-title" id="detail-label" style="font-size:1rem">—</div>
+                    <div class="card-subtitle" id="detail-subtitle" style="font-size:0.72rem">—</div>
+                  </div>
+                  <div style="display:flex;gap:4px;flex-shrink:0">
+                    <button class="btn btn-sm btn-secondary" onclick="Mapping.loadProperties()"
+                      title="Load BACnet Properties" style="padding:4px 8px">📡</button>
+                    <button class="btn btn-sm btn-secondary" onclick="Mapping.edit()" title="Edit"
+                      style="padding:4px 8px">✏️</button>
+                    <button class="btn btn-sm btn-danger" onclick="Mapping.removeSelected()" title="Delete"
+                      style="padding:4px 8px">🗑</button>
+                  </div>
+                </div>
+              </div>
+              <div style="padding:10px 14px">
+                <div class="grid-2" style="gap:8px;margin-bottom:10px">
+                  <div class="stat-card" style="text-align:center;padding:8px">
+                    <div class="stat-label" style="font-size:0.7rem">Present Value</div>
+                    <div class="stat-value" id="detail-value" style="font-size:1.3rem">—</div>
+                    <div class="stat-detail" id="detail-units" style="font-size:0.7rem">—</div>
+                  </div>
+                  <div class="stat-card" style="text-align:center;padding:8px">
+                    <div class="stat-label" style="font-size:0.7rem">Read Mode</div>
+                    <div class="stat-value" id="detail-mode" style="font-size:1rem">—</div>
+                    <div class="stat-detail" id="detail-interval" style="font-size:0.7rem">—</div>
+                  </div>
+                </div>
+                <div id="detail-properties" style="margin-bottom:10px">
+                  <div class="card-title" style="font-size:0.82rem;margin-bottom:4px">📋 BACnet Properties</div>
+                  <div class="table-container" style="max-height:100px;overflow-y:auto">
+                    <table>
+                      <tbody id="detail-props-body">
+                        <tr>
+                          <td colspan="2" style="color:var(--text-muted);font-size:0.8rem">Click 📡 to load</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+                <div>
+                  <div class="card-title" style="font-size:0.82rem;margin-bottom:4px">🎚️ Priority Array</div>
+                  <div class="table-container" style="max-height:220px;overflow-y:auto">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th style="width:40px">P#</th>
+                          <th>Level</th>
+                          <th>Value</th>
+                          <th style="width:60px"></th>
+                        </tr>
+                      </thead>
+                      <tbody id="detail-priority-body"></tbody>
+                    </table>
+                  </div>
+
+                  <!-- Alarm Thresholds -->
+                  <div style="margin-top:12px">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                      <h4 style="margin:0;font-size:0.85rem;color:var(--text-secondary)">🔔 Alarm Thresholds</h4>
+                      <label style="display:flex;align-items:center;gap:4px;font-size:0.75rem;cursor:pointer">
+                        <input type="checkbox" id="alarm-enabled" onchange="Mapping.saveAlarmConfig()">
+                        Enable
+                      </label>
+                    </div>
+                    <div id="alarm-config-panel"
+                      style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:0.8rem">
+                      <div>
+                        <label style="color:var(--text-muted);font-size:0.72rem">High Limit</label>
+                        <input type="number" step="any" class="form-input" id="alarm-high-limit" placeholder="e.g. 35"
+                          style="padding:4px 6px;font-size:0.8rem" onchange="Mapping.saveAlarmConfig()">
+                      </div>
+                      <div>
+                        <label style="color:var(--text-muted);font-size:0.72rem">Low Limit</label>
+                        <input type="number" step="any" class="form-input" id="alarm-low-limit" placeholder="e.g. 5"
+                          style="padding:4px 6px;font-size:0.8rem" onchange="Mapping.saveAlarmConfig()">
+                      </div>
+                      <div>
+                        <label style="color:var(--text-muted);font-size:0.72rem">Deadband</label>
+                        <input type="number" step="0.1" class="form-input" id="alarm-deadband" value="0.5"
+                          style="padding:4px 6px;font-size:0.8rem" onchange="Mapping.saveAlarmConfig()">
+                      </div>
+                      <div>
+                        <label style="color:var(--text-muted);font-size:0.72rem">Severity</label>
+                        <select class="form-input" id="alarm-severity" style="padding:4px 6px;font-size:0.8rem"
+                          onchange="Mapping.saveAlarmConfig()">
+                          <option value="warning">⚠️ Warning</option>
+                          <option value="critical">🔴 Critical</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style="margin-top:10px" id="detail-write-controls">
+                    <!-- Populated dynamically by mapping.js based on object type -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Add/Edit Mapping Modal -->
+        <div class="modal-overlay hidden" id="mapping-modal">
+          <div class="modal">
+            <div class="modal-header">
+              <h3 class="modal-title" id="mapping-modal-title">Add Mapping</h3>
+              <button class="modal-close" onclick="Mapping.closeModal()">&times;</button>
+            </div>
+            <form id="mapping-form" onsubmit="Mapping.save(event)">
+              <div class="form-group">
+                <label class="form-label">Label</label>
+                <input type="text" class="form-input" id="map-label" placeholder="e.g. Room Temperature" />
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Device ID</label>
+                  <input type="number" class="form-input" id="map-device-id" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Object Type</label>
+                  <select class="form-select" id="map-object-type">
+                    <option value="analog-input">Analog Input</option>
+                    <option value="analog-output">Analog Output</option>
+                    <option value="analog-value">Analog Value</option>
+                    <option value="binary-input">Binary Input</option>
+                    <option value="binary-output">Binary Output</option>
+                    <option value="binary-value">Binary Value</option>
+                    <option value="multi-state-input">Multi-State Input</option>
+                    <option value="multi-state-output">Multi-State Output</option>
+                    <option value="multi-state-value">Multi-State Value</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Object Instance</label>
+                  <input type="number" class="form-input" id="map-object-instance" required />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Poll Interval (sec)</label>
+                  <input type="number" class="form-input" id="map-poll-interval" value="10" min="1" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">MQTT Topic (blank = auto)</label>
+                  <input type="text" class="form-input" id="map-mqtt-topic" placeholder="bacnet/device/type/instance" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Read Mode</label>
+                  <select class="form-select" id="map-read-mode">
+                    <option value="poll">🔄 Poll</option>
+                    <option value="cov">⚡ COV</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Group</label>
+                  <select class="form-select" id="map-group">
+                    <option value="">None</option>
+                  </select>
+                </div>
+                <div class="form-group" style="display:flex;align-items:end">
+                </div>
+              </div>
+              <input type="hidden" id="map-edit-id" value="" />
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" onclick="Mapping.closeModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Mapping</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bulk Edit Modal -->
+      <div class="modal-overlay hidden" id="bulk-edit-modal">
+        <div class="modal" style="max-width:420px">
+          <div class="modal-header">
+            <h3>Bulk Edit</h3>
+            <button class="modal-close" onclick="Mapping.closeBulkEdit()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:10px" id="bulk-edit-count">0 points
+              selected</p>
+            <div class="form-group">
+              <label class="form-label">Device ID (blank = no change)</label>
+              <input type="number" class="form-input" id="bulk-device-id" placeholder="Keep current" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Read Mode</label>
+              <select class="form-select" id="bulk-read-mode">
+                <option value="">Keep current</option>
+                <option value="poll">🔄 Poll</option>
+                <option value="cov">⚡ COV</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Group</label>
+              <select class="form-select" id="bulk-group">
+                <option value="">Keep current</option>
+                <option value="NONE">None (Clear group)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Poll Interval (blank = no change)</label>
+              <input type="number" class="form-input" id="bulk-poll-interval" placeholder="Keep current" min="1" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="Mapping.closeBulkEdit()">Cancel</button>
+            <button class="btn btn-primary" onclick="Mapping.applyBulkEdit()">Apply</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clone Modal -->
+      <div class="modal-overlay hidden" id="clone-modal">
+        <div class="modal" style="max-width:420px">
+          <div class="modal-header">
+            <h3>Clone Points to Device</h3>
+            <button class="modal-close" onclick="Mapping.closeClone()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:10px" id="clone-count">0 points
+              selected</p>
+            <div class="form-group">
+              <label class="form-label">Target Device ID</label>
+              <input type="number" class="form-input" id="clone-device-id" required />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Group (optional)</label>
+              <select class="form-select" id="clone-group">
+                <option value="">None</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Label prefix (optional)</label>
+              <input type="text" class="form-input" id="clone-prefix" placeholder="e.g. FCU02_" />
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="Mapping.closeClone()">Cancel</button>
+            <button class="btn btn-primary" onclick="Mapping.applyClone()">Clone</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ GROUPS PAGE ═══ -->
+      <div class="page" id="page-groups">
+        <div class="top-bar">
+          <h2 class="page-title">📋 Group Monitor</h2>
+          <div class="top-actions">
+            <button class="btn btn-primary" onclick="Groups.openManageModal()">⚙️ Manage Groups</button>
+            <button class="btn btn-secondary" onclick="Groups.load()">🔄 Refresh</button>
+          </div>
+        </div>
+        <div id="groups-container">
+          <div class="empty-state">
+            <div class="icon">⏳</div>
+            <h3>Loading groups…</h3>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manage Groups Modal -->
+      <div class="modal-overlay hidden" id="manage-groups-modal">
+        <div class="modal" style="max-width:500px">
+          <div class="modal-header">
+            <h3>Quản lý Groups</h3>
+            <button class="modal-close" onclick="Groups.closeManageModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div style="display:flex;gap:8px;margin-bottom:15px">
+              <input type="text" class="form-input" id="new-group-name" placeholder="Tên nhóm mới..." />
+              <button class="btn btn-primary" onclick="Groups.createGroup()">Thêm</button>
+            </div>
+            <div id="groups-list"
+              style="max-height:350px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+              <!-- Groups list goes here -->
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assign Points to Group Modal -->
+      <div class="modal-overlay hidden" id="assign-points-modal">
+        <div class="modal" style="max-width:600px">
+          <div class="modal-header">
+            <h3 id="assign-modal-title">Gán Points vào Group</h3>
+            <button class="modal-close" onclick="Groups.closeAssignModal()">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div style="margin-bottom:10px">
+              <input type="text" class="form-input" id="assign-search" placeholder="🔍 Tìm kiếm points..."
+                oninput="Groups.filterAssignList(this.value)" style="padding:6px 12px;font-size:0.85rem" />
+            </div>
+            <div id="assign-points-list"
+              style="max-height:400px;overflow-y:auto;border:1px solid var(--border);border-radius:6px">
+            </div>
+            <div class="modal-footer" style="margin-top:12px">
+              <button type="button" class="btn btn-secondary" onclick="Groups.closeAssignModal()">Đóng</button>
+              <button type="button" class="btn btn-primary" onclick="Groups.saveAssignment()">💾 Lưu</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ CHARTS PAGE ═══ -->
+      <div class="page" id="page-charts">
+        <div class="top-bar">
+          <h2 class="page-title">📈 Charts</h2>
+          <div class="top-actions">
+            <button class="btn btn-secondary" onclick="App.exportReport()">📥 Export CSV</button>
+            <button class="btn btn-primary" onclick="Charts.openConfigModal()">+ New Chart</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <!-- Left: Chart Configs -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Chart Configurations</div>
+            </div>
+            <div id="chart-config-list" style="padding:12px">
+              <div class="empty-state" style="padding:24px">
+                <p>No charts configured. Click "+ New Chart" to create one.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: History Stats -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">💾 History Storage</div>
+            </div>
+            <div style="padding:16px" id="history-stats">
+              <div class="grid-2" style="gap:10px;margin-bottom:12px">
+                <div class="stat-card" style="text-align:center">
+                  <div class="stat-label">DB Size</div>
+                  <div class="stat-value" id="hist-db-size">—</div>
+                  <div class="stat-detail" id="hist-db-limit">—</div>
+                </div>
+                <div class="stat-card" style="text-align:center">
+                  <div class="stat-label">Total Records</div>
+                  <div class="stat-value" id="hist-total-records">—</div>
+                  <div class="stat-detail" id="hist-retention">—</div>
+                </div>
+              </div>
+              <div style="font-size:0.82rem;color:var(--text-muted)">
+                Ring buffer: <span id="hist-max-per-point">—</span> records/point
+                • Oldest: <span id="hist-oldest">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Chart Display -->
+        <div class="card" style="margin-top:16px" id="chart-display-card">
+          <div style="padding:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+              <div class="card-title" id="active-chart-title">Select a chart to display</div>
+              <div style="display:flex;gap:6px">
+                <button class="btn btn-sm btn-secondary chart-range-btn active" data-range="1h"
+                  onclick="Charts.setRange('1h')">1H</button>
+                <button class="btn btn-sm btn-secondary chart-range-btn" data-range="6h"
+                  onclick="Charts.setRange('6h')">6H</button>
+                <button class="btn btn-sm btn-secondary chart-range-btn" data-range="24h"
+                  onclick="Charts.setRange('24h')">24H</button>
+                <button class="btn btn-sm btn-secondary chart-range-btn" data-range="7d"
+                  onclick="Charts.setRange('7d')">7D</button>
+                <button class="btn btn-sm btn-secondary chart-range-btn" data-range="30d"
+                  onclick="Charts.setRange('30d')">30D</button>
+              </div>
+            </div>
+            <div id="history-chart" style="min-height:350px"></div>
+          </div>
+        </div>
+
+        <!-- Chart Config Modal -->
+        <div class="modal-overlay hidden" id="chart-config-modal">
+          <div class="modal">
+            <div class="modal-header">
+              <h3 class="modal-title" id="chart-modal-title">New Chart</h3>
+              <button class="modal-close" onclick="Charts.closeConfigModal()">&times;</button>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Chart Name</label>
+              <input type="text" class="form-input" id="chart-name" placeholder="e.g. Temperature Overview" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">Select Points (hold Ctrl/Cmd for multiple)</label>
+              <select class="form-select" id="chart-points" multiple size="8" style="min-height:160px"></select>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">Chart Type</label>
+                <select class="form-select" id="chart-type">
+                  <option value="line">📈 Line</option>
+                  <option value="bar">📊 Bar</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Auto Refresh (sec)</label>
+                <input type="number" class="form-input" id="chart-refresh" value="10" min="5" />
+              </div>
+            </div>
+            <input type="hidden" id="chart-edit-id" value="" />
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="Charts.closeConfigModal()">Cancel</button>
+              <button class="btn btn-primary" onclick="Charts.saveConfig()">Save Chart</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ MQTT CONFIG PAGE ═══ -->
+      <div class="page" id="page-mqtt">
+        <div class="top-bar">
+          <h2 class="page-title">MQTT Configuration</h2>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Broker Settings</div>
+            </div>
+            <form id="mqtt-form" onsubmit="MqttConfig.save(event)">
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Broker Host</label>
+                  <input type="text" class="form-input" id="mqtt-host" placeholder="localhost" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Port</label>
+                  <input type="number" class="form-input" id="mqtt-port" value="1883" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Username</label>
+                  <input type="text" class="form-input" id="mqtt-username" placeholder="optional" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Password</label>
+                  <input type="password" class="form-input" id="mqtt-password" placeholder="optional" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">Client ID</label>
+                  <input type="text" class="form-input" id="mqtt-client-id" value="bacnet_mqtt_gateway" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Topic Prefix</label>
+                  <input type="text" class="form-input" id="mqtt-topic-prefix" value="bacnet" />
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label class="form-label">QoS</label>
+                  <select class="form-select" id="mqtt-qos">
+                    <option value="0">0 — At most once</option>
+                    <option value="1" selected>1 — At least once</option>
+                    <option value="2">2 — Exactly once</option>
+                  </select>
+                </div>
+                <div class="form-group" style="display:flex;align-items:end;gap:20px;padding-bottom:4px">
+                  <label class="form-checkbox">
+                    <input type="checkbox" id="mqtt-tls" /> Use TLS
+                  </label>
+                  <label class="form-checkbox">
+                    <input type="checkbox" id="mqtt-retain" /> Retain Messages
+                  </label>
+                </div>
+              </div>
+              <div style="display:flex;gap:10px;margin-top:8px">
+                <button type="submit" class="btn btn-primary">💾 Save Config</button>
+                <button type="button" class="btn btn-secondary" onclick="MqttConfig.test()">🧪 Test Connection</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Connection Status</div>
+            </div>
+            <div style="text-align:center;padding:24px">
+              <div style="font-size:4rem;margin-bottom:12px" id="mqtt-status-icon">📡</div>
+              <div id="mqtt-status-text" style="font-size:1.1rem;font-weight:600;margin-bottom:8px">
+                Checking…
+              </div>
+              <div id="mqtt-status-detail" class="badge badge-info">—</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ═══ SYSTEM PAGE ═══ -->
+      <div class="page" id="page-system">
+        <div class="top-bar">
+          <h2 class="page-title">System</h2>
+          <div class="top-actions">
+            <button class="btn btn-secondary" onclick="System.exportConfig()">📥 Export Config</button>
+            <label class="btn btn-secondary" style="cursor:pointer">
+              📤 Import Config
+              <input type="file" accept=".json" style="display:none" onchange="System.importConfig(event)" />
+            </label>
+          </div>
+        </div>
+
+        <div class="card section">
+          <div class="card-header">
+            <div class="card-title">Application Logs</div>
+            <button class="btn btn-sm btn-secondary" onclick="System.refreshLogs()">⟳ Refresh</button>
+          </div>
+          <div class="log-viewer" id="log-viewer">
+            <div class="log-line" style="color:var(--text-muted)">Loading logs…</div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ═══ SCHEDULER PAGE ═══ -->
+      <div class="page" id="page-scheduler">
+        <div class="top-bar">
+          <h2 class="page-title">⏰ Scheduler</h2>
+          <div class="top-actions">
+            <button class="btn btn-primary" onclick="Scheduler.openModal()">+ New Schedule</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Scheduled Operations</div>
+            <div class="card-subtitle">Automate BACnet write commands at set times</div>
+          </div>
+          <div id="schedule-list" style="padding:12px">
+            <div class="empty-state" style="padding:24px">
+              <p>Loading...</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Schedule Add/Edit Modal -->
+      <div class="modal-overlay hidden" id="schedule-modal">
+        <div class="modal">
+          <div class="modal-header">
+            <h3 class="modal-title" id="schedule-modal-title">New Schedule</h3>
+            <button class="modal-close" onclick="Scheduler.closeModal()">&times;</button>
+          </div>
+          <form onsubmit="Scheduler.save(event)">
+            <input type="hidden" id="sched-id">
+            <div class="form-group">
+              <label class="form-label">Name</label>
+              <input type="text" class="form-input" id="sched-name" placeholder="e.g. Turn ON AHU Morning" required>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+              <div class="form-group">
+                <label class="form-label">Device ID</label>
+                <input type="number" class="form-input" id="sched-device" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Object Type</label>
+                <select class="form-input" id="sched-obj-type">
+                  <option value="binaryOutput">Binary Output</option>
+                  <option value="binaryValue">Binary Value</option>
+                  <option value="analogOutput">Analog Output</option>
+                  <option value="analogValue">Analog Value</option>
+                  <option value="multiStateOutput">Multi-State Output</option>
+                  <option value="multiStateValue">Multi-State Value</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Object Instance</label>
+                <input type="number" class="form-input" id="sched-obj-instance" required>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div class="form-group">
+                <label class="form-label">Value to Write</label>
+                <input type="text" class="form-input" id="sched-value" placeholder="e.g. 1, active, 25.5" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Priority (1-16)</label>
+                <input type="number" class="form-input" id="sched-priority" min="1" max="16" value="8">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Time (HH:MM)</label>
+              <input type="time" class="form-input" id="sched-time" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label" style="margin-bottom:6px">Days of Week</label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-0" checked> Mon</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-1" checked> Tue</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-2" checked> Wed</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-3" checked> Thu</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-4" checked> Fri</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-5"> Sat</label>
+                <label style="display:flex;align-items:center;gap:4px;font-size:0.85rem"><input type="checkbox"
+                    id="sched-day-6"> Sun</label>
+              </div>
+            </div>
+            <div class="form-group">
+              <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem">
+                <input type="checkbox" id="sched-enabled" checked> Enabled
+              </label>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" onclick="Scheduler.closeModal()">Cancel</button>
+              <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- ═══ LOGS PAGE ═══ -->
+      <div class="page" id="page-logs">
+        <div class="top-bar">
+          <h2 class="page-title">📝 Event Logs</h2>
+          <div class="top-actions">
+            <!-- Quick Filters -->
+            <button class="btn btn-sm" id="btn-filter-alarms" onclick="Logs.setQuickFilter('alarm')"
+              style="margin-right:8px;background:var(--bg-tertiary);border:1px solid var(--border)">🔔 Alarms</button>
+            <button class="btn btn-sm" id="btn-filter-conn" onclick="Logs.setQuickFilter('connection')"
+              style="margin-right:16px;background:var(--bg-tertiary);border:1px solid var(--border)">📶 Connect
+              Loss</button>
+
+            <select class="form-select" id="log-type-filter" onchange="Logs.loadEvents()"
+              style="padding:6px 10px;margin-right:8px">
+              <option value="">All Events</option>
+              <option value="device_online">🟢 Device Online</option>
+              <option value="device_offline">🔴 Device Offline</option>
+              <option value="alarm">🔔 Alarm</option>
+              <option value="poll_error">⚠️ Poll Error</option>
+            </select>
+            <select class="form-select" id="log-severity-filter" onchange="Logs.loadEvents()"
+              style="padding:6px 10px;margin-right:8px">
+              <option value="">All Severity</option>
+              <option value="info">ℹ️ Info</option>
+              <option value="warning">⚠️ Warning</option>
+              <option value="critical">🔴 Critical</option>
+            </select>
+            <button class="btn btn-secondary" onclick="Logs.loadEvents()">⟳ Refresh</button>
+          </div>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden">
+          <div id="logs-container" style="height:calc(100vh - 160px);overflow-y:auto;font-size:0.85rem">
+            <div style="color:var(--text-muted);padding:16px;text-align:center">Loading logs…</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- JS Modules -->
+  <script src="/js/app.js?v=6"></script>
+  <script src="/js/dashboard.js?v=6"></script>
+  <script src="/js/devices.js?v=6"></script>
+  <script src="/js/mapping.js?v=6"></script>
+  <script src="/js/groups.js?v=6"></script>
+  <script src="/js/charts.js?v=6"></script>
+  <script src="/js/logs.js?v=6"></script>
+  <script src="/js/scheduler.js?v=2"></script>
+  <script src="/js/mqtt_config.js?v=6"></script>
+</body>
+
+</html>

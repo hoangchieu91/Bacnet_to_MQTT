@@ -1,0 +1,27 @@
+{
+    "mqtt": {
+        "broker_host": "nxchieu.duckdns.org",
+        "broker_port": 54883,
+        "username": "",
+        "password": "",
+        "use_tls": false,
+        "client_id": "bacnet_mqtt_gateway",
+        "topic_prefix": "bacnet",
+        "qos": 1,
+        "retain": false
+    },
+    "bacnet": {
+        "ip": "0.0.0.0",
+        "port": 47808,
+        "mask": "24",
+        "device_id": 599,
+        "default_poll_interval": 10
+    },
+    "web": {
+        "host": "0.0.0.0",
+        "port": 8080
+    },
+    "gateway": {
+        "mappings": []
+    }
+}
