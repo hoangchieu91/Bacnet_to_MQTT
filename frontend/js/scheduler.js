@@ -16,65 +16,63 @@ const Scheduler = (() => {
     }
 
     function render() {
-        const container = document.getElementById('schedule-list');
-        if (!container) return;
+        const wrapper = document.getElementById('schedule-list-wrapper');
+        if (!wrapper) return;
 
         if (schedules.length === 0) {
-            container.innerHTML = `
-                <div class="empty-state" style="padding:32px;text-align:center">
-                    <p style="font-size:1.5rem;margin-bottom:8px">⏰</p>
-                    <p>No schedules configured.</p>
-                    <p style="color:var(--text-muted);font-size:0.85rem">Click "+ New Schedule" to add a timed operation.</p>
-                </div>`;
+            wrapper.innerHTML = `
+              <div class="card">
+                <div class="empty-state-cta">
+                  <div class="icon">⏰</div>
+                  <h3>Chưa có lịch nào</h3>
+                  <p>Tự động ghi lệnh BACnet vào thời điểm đặt trước — giờ bật/tắt thiết bị, thay đổi setpoint tự động.</p>
+                  <button class="btn btn-primary" onclick="Scheduler.openModal()">➕ Tạo Schedule đầu tiên</button>
+                </div>
+              </div>`;
             return;
         }
 
         const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-        const rows = schedules.map(s => {
-            // Parse cron for display
+        const cards = schedules.map(s => {
             const parts = (s.cron || '').split('|');
             const time = parts[0] || '—';
             let days = 'Every day';
             if (parts.length > 1) {
                 days = parts[1].split(',').map(d => DAY_NAMES[parseInt(d)] || d).join(', ');
             }
-
-            const statusClass = s.enabled ? 'badge-success' : '';
-            const statusText = s.enabled ? '✅ Active' : '⏸ Disabled';
+            const isActive = s.enabled !== false;
+            const statusBadge = isActive
+                ? '<span class="badge badge-success">Active</span>'
+                : '<span class="badge" style="opacity:0.6">Disabled</span>';
 
             return `
-                <tr>
-                    <td style="font-weight:600">${escapeHtml(s.name || s.id)}</td>
-                    <td>Device ${s.device_id} / ${s.object_type}:${s.object_instance}</td>
-                    <td style="font-weight:600;color:var(--accent-primary)">${s.value}</td>
-                    <td>P${s.priority}</td>
-                    <td><code>${time}</code></td>
-                    <td>${days}</td>
-                    <td><span class="badge ${statusClass}">${statusText}</span></td>
-                    <td>
-                        <button class="btn btn-sm btn-secondary" onclick="Scheduler.edit('${s.id}')" title="Edit">✏️</button>
-                        <button class="btn btn-sm btn-danger" onclick="Scheduler.remove('${s.id}')" title="Delete">🗑</button>
-                    </td>
-                </tr>`;
+              <div class="schedule-card">
+                <div class="schedule-card-time">${time}</div>
+                <div class="schedule-card-info">
+                  <div class="schedule-card-name">${escapeHtml(s.name || s.id)}</div>
+                  <div class="schedule-card-meta">
+                    Dev ${s.device_id} / ${s.object_type}:${s.object_instance}
+                    — Write <strong>${s.value}</strong> @ P${s.priority}
+                    — ${days}
+                  </div>
+                </div>
+                ${statusBadge}
+                <div class="schedule-card-actions">
+                  <button class="btn btn-sm btn-secondary" onclick="Scheduler.edit('${s.id}')" title="Edit">✏️</button>
+                  <button class="btn btn-sm btn-danger" onclick="Scheduler.remove('${s.id}')" title="Delete">🗑</button>
+                </div>
+              </div>`;
         }).join('');
 
-        container.innerHTML = `
-            <table class="data-table" style="width:100%">
-                <thead>
-                    <tr>
-                        <th>Name</th>
-                        <th>Target</th>
-                        <th>Value</th>
-                        <th>Priority</th>
-                        <th>Time</th>
-                        <th>Days</th>
-                        <th>Status</th>
-                        <th style="width:100px"></th>
-                    </tr>
-                </thead>
-                <tbody>${rows}</tbody>
-            </table>`;
+        wrapper.innerHTML = `
+          <div class="card" style="padding:12px 16px">
+            <div class="card-header" style="margin-bottom:12px">
+              <div class="card-title">Scheduled Operations</div>
+              <div class="card-subtitle">${schedules.length} schedule${schedules.length !== 1 ? 's' : ''} configured</div>
+            </div>
+            ${cards}
+          </div>`;
     }
 
     function openModal(sched = null) {

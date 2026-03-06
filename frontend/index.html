@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>BACnet-MQTT Gateway</title>
   <meta name="description" content="BACnet to MQTT Gateway — Real-time building automation monitoring and control" />
-  <link rel="stylesheet" href="/css/style.css?v=4" />
+  <link rel="stylesheet" href="/css/style.css?v=5" />
   <script src="https://cdn.jsdelivr.net/npm/apexcharts@3/dist/apexcharts.min.js"></script>
 </head>
 
@@ -51,11 +51,8 @@
         </div>
 
         <div class="nav-section-label">Settings</div>
-        <div class="nav-item" data-page="mqtt" id="nav-mqtt">
-          <span class="nav-icon">📡</span> MQTT Config
-        </div>
-        <div class="nav-item" data-page="system" id="nav-system">
-          <span class="nav-icon">⚙️</span> System
+        <div class="nav-item" data-page="settings" id="nav-settings">
+          <span class="nav-icon">⚙️</span> Settings
         </div>
         <div style="padding:8px 10px;margin-top:4px">
           <button class="sidebar-toggle" onclick="App.toggleTheme()" id="theme-toggle"
@@ -113,47 +110,36 @@
           </div>
         </div>
 
-        <!-- Pi Health Card -->
-        <div class="card section" id="pi-health-card">
-          <div class="card-header">
-            <div>
-              <div class="card-title">🖥️ Pi Health</div>
-              <div class="card-subtitle" id="health-subtitle">Loading…</div>
-            </div>
-            <span class="badge" id="health-ram-badge">—</span>
-          </div>
-          <div class="grid-4" style="gap:16px">
-            <div>
-              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
-                <span>CPU</span><span id="health-cpu-pct">—</span>
-              </div>
-              <div class="progress-bar">
+        <!-- Pi Health — Compact inline bar -->
+        <div class="pi-health-bar" id="pi-health-card">
+          <div class="pi-health-label">🖥️ <span id="health-subtitle">Pi Health</span></div>
+          <div class="pi-health-metrics">
+            <div class="pi-metric">
+              <span class="pi-metric-name">CPU</span>
+              <div class="progress-bar pi-bar">
                 <div class="progress-fill" id="health-cpu-bar" style="width:0%"></div>
               </div>
+              <span class="pi-metric-val" id="health-cpu-pct">—</span>
             </div>
-            <div>
-              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
-                <span>RAM</span><span id="health-ram-pct">—</span>
-              </div>
-              <div class="progress-bar">
+            <div class="pi-metric">
+              <span class="pi-metric-name">RAM</span>
+              <div class="progress-bar pi-bar">
                 <div class="progress-fill" id="health-ram-bar" style="width:0%"></div>
               </div>
+              <span class="pi-metric-val" id="health-ram-pct">—</span>
             </div>
-            <div>
-              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
-                <span>Disk</span><span id="health-disk-pct">—</span>
-              </div>
-              <div class="progress-bar">
+            <div class="pi-metric">
+              <span class="pi-metric-name">Disk</span>
+              <div class="progress-bar pi-bar">
                 <div class="progress-fill" id="health-disk-bar" style="width:0%"></div>
               </div>
+              <span class="pi-metric-val" id="health-disk-pct">—</span>
             </div>
-            <div>
-              <div style="display:flex;justify-content:space-between;font-size:0.82rem;margin-bottom:4px">
-                <span>🌡️ CPU Temp</span><span id="health-temp">—</span>
-              </div>
-              <div style="font-size:1.3rem;font-weight:700;color:var(--accent-primary)" id="health-temp-big">—</div>
+            <div class="pi-metric pi-temp">
+              🌡️ <span id="health-temp-big" style="font-weight:700;color:var(--accent-primary)">—</span>
             </div>
           </div>
+          <span class="badge" id="health-ram-badge" style="margin-left:auto;flex-shrink:0">—</span>
         </div>
 
         <!-- Group Summary Cards -->
@@ -693,6 +679,8 @@
         <div class="top-bar">
           <h2 class="page-title">📋 Group Monitor</h2>
           <div class="top-actions">
+            <input type="text" class="form-input" id="groups-search" placeholder="🔍 Tìm group / point…"
+              oninput="Groups.filterGroups(this.value)" style="padding:6px 12px;font-size:0.85rem;min-width:200px" />
             <button class="btn btn-primary" onclick="Groups.openManageModal()">⚙️ Manage Groups</button>
             <button class="btn btn-secondary" onclick="Groups.load()">🔄 Refresh</button>
           </div>
@@ -856,131 +844,129 @@
         </div>
       </div>
 
-      <!-- ═══ MQTT CONFIG PAGE ═══ -->
-      <div class="page" id="page-mqtt">
+      <!-- ═══ SETTINGS PAGE (MQTT + System) ═══ -->
+      <div class="page" id="page-settings">
         <div class="top-bar">
-          <h2 class="page-title">MQTT Configuration</h2>
+          <h2 class="page-title">⚙️ Settings</h2>
         </div>
 
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Broker Settings</div>
-            </div>
-            <form id="mqtt-form" onsubmit="MqttConfig.save(event)">
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Broker Host</label>
-                  <input type="text" class="form-input" id="mqtt-host" placeholder="localhost" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Port</label>
-                  <input type="number" class="form-input" id="mqtt-port" value="1883" />
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Username</label>
-                  <input type="text" class="form-input" id="mqtt-username" placeholder="optional" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Password</label>
-                  <input type="password" class="form-input" id="mqtt-password" placeholder="optional" />
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">Client ID</label>
-                  <input type="text" class="form-input" id="mqtt-client-id" value="bacnet_mqtt_gateway" />
-                </div>
-                <div class="form-group">
-                  <label class="form-label">Topic Prefix</label>
-                  <input type="text" class="form-input" id="mqtt-topic-prefix" value="bacnet" />
-                </div>
-              </div>
-              <div class="form-row">
-                <div class="form-group">
-                  <label class="form-label">QoS</label>
-                  <select class="form-select" id="mqtt-qos">
-                    <option value="0">0 — At most once</option>
-                    <option value="1" selected>1 — At least once</option>
-                    <option value="2">2 — Exactly once</option>
-                  </select>
-                </div>
-                <div class="form-group" style="display:flex;align-items:end;gap:20px;padding-bottom:4px">
-                  <label class="form-checkbox">
-                    <input type="checkbox" id="mqtt-tls" /> Use TLS
-                  </label>
-                  <label class="form-checkbox">
-                    <input type="checkbox" id="mqtt-retain" /> Retain Messages
-                  </label>
-                </div>
-              </div>
-              <div style="display:flex;gap:10px;margin-top:8px">
-                <button type="submit" class="btn btn-primary">💾 Save Config</button>
-                <button type="button" class="btn btn-secondary" onclick="MqttConfig.test()">🧪 Test Connection</button>
-              </div>
-            </form>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Connection Status</div>
-            </div>
-            <div style="text-align:center;padding:24px">
-              <div style="font-size:4rem;margin-bottom:12px" id="mqtt-status-icon">📡</div>
-              <div id="mqtt-status-text" style="font-size:1.1rem;font-weight:600;margin-bottom:8px">
-                Checking…
-              </div>
-              <div id="mqtt-status-detail" class="badge badge-info">—</div>
-            </div>
-          </div>
+        <!-- Tab nav -->
+        <div class="tab-nav" style="margin-bottom:16px">
+          <button class="tab-btn active" id="tab-mqtt" onclick="App.switchSettingsTab('mqtt')">📡 MQTT</button>
+          <button class="tab-btn" id="tab-system" onclick="App.switchSettingsTab('system')">🖥️ System</button>
         </div>
-      </div>
 
-      <!-- ═══ SYSTEM PAGE ═══ -->
-      <div class="page" id="page-system">
-        <div class="top-bar">
-          <h2 class="page-title">System</h2>
-          <div class="top-actions">
+        <!-- MQTT Tab -->
+        <div id="settings-tab-mqtt">
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Broker Settings</div>
+              </div>
+              <form id="mqtt-form" onsubmit="MqttConfig.save(event)">
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">Broker Host</label>
+                    <input type="text" class="form-input" id="mqtt-host" placeholder="localhost" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Port</label>
+                    <input type="number" class="form-input" id="mqtt-port" value="1883" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <input type="text" class="form-input" id="mqtt-username" placeholder="optional" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="mqtt-password" placeholder="optional" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">Client ID</label>
+                    <input type="text" class="form-input" id="mqtt-client-id" value="bacnet_mqtt_gateway" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Topic Prefix</label>
+                    <input type="text" class="form-input" id="mqtt-topic-prefix" value="bacnet" />
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label class="form-label">QoS</label>
+                    <select class="form-select" id="mqtt-qos">
+                      <option value="0">0 — At most once</option>
+                      <option value="1" selected>1 — At least once</option>
+                      <option value="2">2 — Exactly once</option>
+                    </select>
+                  </div>
+                  <div class="form-group" style="display:flex;align-items:end;gap:20px;padding-bottom:4px">
+                    <label class="form-checkbox">
+                      <input type="checkbox" id="mqtt-tls" /> Use TLS
+                    </label>
+                    <label class="form-checkbox">
+                      <input type="checkbox" id="mqtt-retain" /> Retain Messages
+                    </label>
+                  </div>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:8px">
+                  <button type="submit" class="btn btn-primary">💾 Save Config</button>
+                  <button type="button" class="btn btn-secondary" onclick="MqttConfig.test()">🧪 Test
+                    Connection</button>
+                </div>
+              </form>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Connection Status</div>
+              </div>
+              <div style="text-align:center;padding:24px">
+                <div style="font-size:4rem;margin-bottom:12px" id="mqtt-status-icon">📡</div>
+                <div id="mqtt-status-text" style="font-size:1.1rem;font-weight:600;margin-bottom:8px">
+                  Checking…
+                </div>
+                <div id="mqtt-status-detail" class="badge badge-info">—</div>
+              </div>
+            </div>
+          </div>
+        </div><!-- /settings-tab-mqtt -->
+
+        <!-- System Tab -->
+        <div id="settings-tab-system" style="display:none">
+          <div class="top-actions" style="margin-bottom:12px">
             <button class="btn btn-secondary" onclick="System.exportConfig()">📥 Export Config</button>
             <label class="btn btn-secondary" style="cursor:pointer">
               📤 Import Config
               <input type="file" accept=".json" style="display:none" onchange="System.importConfig(event)" />
             </label>
           </div>
-        </div>
-
-        <div class="card section">
-          <div class="card-header">
-            <div class="card-title">Application Logs</div>
-            <button class="btn btn-sm btn-secondary" onclick="System.refreshLogs()">⟳ Refresh</button>
+          <div class="card section">
+            <div class="card-header">
+              <div class="card-title">Application Logs</div>
+              <button class="btn btn-sm btn-secondary" onclick="System.refreshLogs()">⟳ Refresh</button>
+            </div>
+            <div class="log-viewer" id="log-viewer">
+              <div class="log-line" style="color:var(--text-muted)">Loading logs…</div>
+            </div>
           </div>
-          <div class="log-viewer" id="log-viewer">
-            <div class="log-line" style="color:var(--text-muted)">Loading logs…</div>
-          </div>
-        </div>
+        </div><!-- /settings-tab-system -->
 
-      </div>
+      </div><!-- /page-settings -->
 
       <!-- ═══ SCHEDULER PAGE ═══ -->
       <div class="page" id="page-scheduler">
         <div class="top-bar">
           <h2 class="page-title">⏰ Scheduler</h2>
           <div class="top-actions">
-            <button class="btn btn-primary" onclick="Scheduler.openModal()">+ New Schedule</button>
+            <button class="btn btn-primary" onclick="Scheduler.openModal()">➕ New Schedule</button>
           </div>
         </div>
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Scheduled Operations</div>
-            <div class="card-subtitle">Automate BACnet write commands at set times</div>
-          </div>
-          <div id="schedule-list" style="padding:12px">
-            <div class="empty-state" style="padding:24px">
-              <p>Loading...</p>
-            </div>
-          </div>
+        <div id="schedule-list-wrapper">
+          <!-- populated by scheduler.js -->
         </div>
       </div>
 
@@ -1069,34 +1055,40 @@
         <div class="top-bar">
           <h2 class="page-title">📝 Event Logs</h2>
           <div class="top-actions">
-            <!-- Quick Filters -->
-            <button class="btn btn-sm" id="btn-filter-alarms" onclick="Logs.setQuickFilter('alarm')"
-              style="margin-right:8px;background:var(--bg-tertiary);border:1px solid var(--border)">🔔 Alarms</button>
-            <button class="btn btn-sm" id="btn-filter-conn" onclick="Logs.setQuickFilter('connection')"
-              style="margin-right:16px;background:var(--bg-tertiary);border:1px solid var(--border)">📶 Connect
-              Loss</button>
-
+            <!-- Quick filter pills -->
+            <button class="btn btn-sm" id="btn-filter-alarms" onclick="Logs.setQuickFilter('alarm')">🔔 Alarm</button>
+            <button class="btn btn-sm" id="btn-filter-conn" onclick="Logs.setQuickFilter('connection')">📶
+              Disconnect</button>
+            <div style="width:1px;height:24px;background:var(--border);margin:0 4px"></div>
             <select class="form-select" id="log-type-filter" onchange="Logs.loadEvents()"
-              style="padding:6px 10px;margin-right:8px">
-              <option value="">All Events</option>
-              <option value="device_online">🟢 Device Online</option>
-              <option value="device_offline">🔴 Device Offline</option>
+              style="padding:5px 8px;width:auto">
+              <option value="">All Types</option>
+              <option value="device_online">🟢 Online</option>
+              <option value="device_offline">🔴 Offline</option>
               <option value="alarm">🔔 Alarm</option>
-              <option value="poll_error">⚠️ Poll Error</option>
+              <option value="poll_error">⚠️ Error</option>
             </select>
             <select class="form-select" id="log-severity-filter" onchange="Logs.loadEvents()"
-              style="padding:6px 10px;margin-right:8px">
+              style="padding:5px 8px;width:auto">
               <option value="">All Severity</option>
               <option value="info">ℹ️ Info</option>
               <option value="warning">⚠️ Warning</option>
               <option value="critical">🔴 Critical</option>
             </select>
-            <button class="btn btn-secondary" onclick="Logs.loadEvents()">⟳ Refresh</button>
+            <button class="btn btn-secondary btn-sm" onclick="Logs.loadEvents()">⟳</button>
           </div>
         </div>
 
+        <!-- Summary stat badges -->
+        <div class="logs-summary" id="logs-summary">
+          <span class="log-badge log-badge-total">📋 Total: <strong id="log-count-total">—</strong></span>
+          <span class="log-badge log-badge-warning">⚠️ Warning: <strong id="log-count-warning">—</strong></span>
+          <span class="log-badge log-badge-critical">🔴 Critical: <strong id="log-count-critical">—</strong></span>
+          <span class="log-badge log-badge-info">ℹ️ Info: <strong id="log-count-info">—</strong></span>
+        </div>
+
         <div class="card" style="padding:0;overflow:hidden">
-          <div id="logs-container" style="height:calc(100vh - 160px);overflow-y:auto;font-size:0.85rem">
+          <div id="logs-container" style="height:calc(100vh - 210px);overflow-y:auto;font-size:0.85rem">
             <div style="color:var(--text-muted);padding:16px;text-align:center">Loading logs…</div>
           </div>
         </div>
@@ -1109,15 +1101,15 @@
   <div class="toast-container" id="toast-container"></div>
 
   <!-- JS Modules -->
-  <script src="/js/app.js?v=6"></script>
-  <script src="/js/dashboard.js?v=6"></script>
-  <script src="/js/devices.js?v=6"></script>
-  <script src="/js/mapping.js?v=6"></script>
-  <script src="/js/groups.js?v=6"></script>
-  <script src="/js/charts.js?v=6"></script>
-  <script src="/js/logs.js?v=6"></script>
-  <script src="/js/scheduler.js?v=2"></script>
-  <script src="/js/mqtt_config.js?v=6"></script>
+  <script src="/js/app.js?v=7"></script>
+  <script src="/js/dashboard.js?v=7"></script>
+  <script src="/js/devices.js?v=7"></script>
+  <script src="/js/mapping.js?v=7"></script>
+  <script src="/js/groups.js?v=7"></script>
+  <script src="/js/charts.js?v=7"></script>
+  <script src="/js/logs.js?v=7"></script>
+  <script src="/js/scheduler.js?v=3"></script>
+  <script src="/js/mqtt_config.js?v=7"></script>
 </body>
 
 </html>

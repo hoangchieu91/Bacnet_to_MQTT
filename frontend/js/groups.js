@@ -329,10 +329,31 @@ const Groups = (() => {
     await load();
   }
 
+  function filterGroups(query) {
+    const q = query.trim().toLowerCase();
+    const container = document.getElementById('groups-container');
+    if (!container) return;
+
+    // Find all group sections (cards or sections built by render())
+    const groupSections = container.querySelectorAll('[data-group-id]');
+    if (groupSections.length === 0) {
+      // Fallback: filter table rows if card layout not used
+      const rows = container.querySelectorAll('tr[data-group-row]');
+      rows.forEach(row => {
+        row.style.display = q && !row.textContent.toLowerCase().includes(q) ? 'none' : '';
+      });
+      return;
+    }
+    groupSections.forEach(section => {
+      const text = section.textContent.toLowerCase();
+      section.style.display = q && !text.includes(q) ? 'none' : '';
+    });
+  }
+
   return {
     load, render, toggleGroup, updateFromWs,
     openManageModal, closeManageModal, createGroup, deleteGroup,
     openAssignModal, closeAssignModal, saveAssignment, filterAssignList,
-    getConfigGroups
+    filterGroups, getConfigGroups
   };
 })();

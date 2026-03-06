@@ -1142,3 +1142,279 @@ tbody tr:hover {
     max-height: 400px;
   }
 }
+
+/* ── Pi Health Compact Bar ──────────────────── */
+.pi-health-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.pi-health-label {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 80px;
+}
+
+.pi-health-metrics {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.pi-metric {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.pi-metric.pi-temp {
+  min-width: auto;
+  font-size: 0.87rem;
+  gap: 4px;
+}
+
+.pi-metric-name {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 28px;
+}
+
+.pi-metric-val {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 42px;
+  text-align: right;
+}
+
+.progress-bar.pi-bar {
+  flex: 1;
+  height: 6px;
+  min-width: 50px;
+  max-width: 90px;
+}
+
+/* ── Tab Navigation ─────────────────────────── */
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  width: fit-content;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 7px 18px;
+  border-radius: calc(var(--radius-xs) - 2px);
+  transition: all var(--transition);
+  font-family: inherit;
+}
+
+.tab-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+
+.tab-btn.active {
+  background: var(--accent-primary);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── Logs Summary Badges ────────────────────── */
+.logs-summary {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.log-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.log-badge-total {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+.log-badge-warning {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.3);
+  color: var(--warning);
+}
+
+.log-badge-critical {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: var(--error);
+}
+
+.log-badge-info {
+  background: rgba(6, 182, 212, 0.12);
+  border-color: rgba(6, 182, 212, 0.3);
+  color: var(--info);
+}
+
+/* ── Log Viewer improvement ─────────────────── */
+.log-viewer {
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+  max-height: 600px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  padding: 12px 16px;
+  background: var(--bg-primary);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+
+/* ── Scheduler Card Layout ──────────────────── */
+.schedule-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  margin-bottom: 8px;
+  transition: all var(--transition);
+}
+
+.schedule-card:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-card-hover);
+}
+
+.schedule-card-info {
+  flex: 1;
+}
+
+.schedule-card-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
+}
+
+.schedule-card-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.schedule-card-time {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+  min-width: 60px;
+  text-align: center;
+}
+
+.schedule-card-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* ── Groups search in top-bar ───────────────── */
+.groups-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color var(--transition);
+}
+
+.groups-card:hover {
+  border-color: var(--accent-primary);
+}
+
+.groups-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.groups-card-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.groups-card-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  flex: 1;
+}
+
+.groups-card-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.groups-card-body {
+  border-top: 1px solid var(--border);
+}
+
+/* ── Better empty state ─────────────────────── */
+.empty-state-cta {
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.empty-state-cta .icon {
+  font-size: 3rem;
+  margin-bottom: 12px;
+  opacity: 0.5;
+}
+
+.empty-state-cta h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+
+.empty-state-cta p {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+  max-width: 320px;
+  margin-left: auto;
+  margin-right: auto;
+}

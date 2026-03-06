@@ -40,13 +40,31 @@ const App = (() => {
         if (pageEl) pageEl.classList.add('active');
 
         // Trigger page-specific load
-        if (page === 'mqtt') MqttConfig.load();
-        if (page === 'system') System.refreshLogs();
+        if (page === 'settings') {
+            MqttConfig.load();
+            switchSettingsTab('mqtt'); // default tab
+        }
         if (page === 'mappings') Mapping.load();
         if (page === 'groups' && typeof Groups !== 'undefined') Groups.load();
         if (page === 'charts' && typeof Charts !== 'undefined') Charts.load();
         if (page === 'logs' && typeof Logs !== 'undefined') Logs.loadEvents();
         if (page === 'scheduler' && typeof Scheduler !== 'undefined') Scheduler.load();
+    }
+
+    function switchSettingsTab(tab) {
+        // Tab buttons
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        const activeBtn = document.getElementById(`tab-${tab}`);
+        if (activeBtn) activeBtn.classList.add('active');
+
+        // Tab content panels
+        const mqttPanel = document.getElementById('settings-tab-mqtt');
+        const sysPanel = document.getElementById('settings-tab-system');
+        if (mqttPanel) mqttPanel.style.display = tab === 'mqtt' ? '' : 'none';
+        if (sysPanel) sysPanel.style.display = tab === 'system' ? '' : 'none';
+
+        // Load system logs when switching to system tab
+        if (tab === 'system') System.refreshLogs();
     }
 
     // ── WebSocket ───────────────────────────────
@@ -273,7 +291,7 @@ const App = (() => {
     document.addEventListener('DOMContentLoaded', () => setTimeout(restorePrefs, 50));
 
     // ── Expose ──────────────────────────────────
-    return { init, navigateTo, toggleGateway, toast, api, pollStatus, toggleSidebar, toggleTheme };
+    return { init, navigateTo, switchSettingsTab, toggleGateway, toast, api, pollStatus, toggleSidebar, toggleTheme };
 })();
 
 // System namespace (logs, config export/import)
