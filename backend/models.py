@@ -73,6 +73,7 @@ class BacnetDevice(BaseModel):
     address: str = ""
     vendor_name: str = ""
     model_name: str = ""
+    network_id: str = ""
     objects: list[BacnetObject] = Field(default_factory=list)
 
 
@@ -143,6 +144,7 @@ class GatewayConfig(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     groups: list[GroupConfig] = Field(default_factory=list)
     schedules: list["ScheduleEntry"] = Field(default_factory=list)
+    anomaly_rules: list[dict] = Field(default_factory=list)
 
 
 class ScheduleEntry(BaseModel):

@@ -76,6 +76,38 @@
     <!-- ═══ Main Content ═══ -->
     <main class="main-content">
 
+      <!-- Global Pi Health Header -->
+      <div class="pi-health-bar" id="pi-health-card" style="margin-top:-4px;margin-bottom:20px;padding:8px 16px;">
+        <div class="pi-health-label" style="font-size:0.9rem">🖥️ <span id="health-subtitle" style="font-weight:400">Pi Health</span></div>
+        <div class="pi-health-metrics">
+          <div class="pi-metric">
+            <span class="pi-metric-name">CPU</span>
+            <div class="progress-bar pi-bar">
+              <div class="progress-fill" id="health-cpu-bar" style="width:0%"></div>
+            </div>
+            <span class="pi-metric-val" id="health-cpu-pct">—</span>
+          </div>
+          <div class="pi-metric">
+            <span class="pi-metric-name">RAM</span>
+            <div class="progress-bar pi-bar">
+              <div class="progress-fill" id="health-ram-bar" style="width:0%"></div>
+            </div>
+            <span class="pi-metric-val" id="health-ram-pct">—</span>
+          </div>
+          <div class="pi-metric">
+            <span class="pi-metric-name">Disk</span>
+            <div class="progress-bar pi-bar">
+              <div class="progress-fill" id="health-disk-bar" style="width:0%"></div>
+            </div>
+            <span class="pi-metric-val" id="health-disk-pct">—</span>
+          </div>
+          <div class="pi-metric pi-temp">
+            🌡️ <span id="health-temp-big" style="font-weight:700;color:var(--accent-primary)">—</span>
+          </div>
+        </div>
+        <span class="badge" id="health-ram-badge" style="margin-left:auto;flex-shrink:0">—</span>
+      </div>
+
       <!-- ═══ DASHBOARD PAGE ═══ -->
       <div class="page active" id="page-dashboard">
         <div class="top-bar">
@@ -108,38 +140,6 @@
             <div class="stat-value" id="stat-mqtt-messages">0</div>
             <div class="stat-detail" id="stat-mqtt-detail">Disconnected</div>
           </div>
-        </div>
-
-        <!-- Pi Health — Compact inline bar -->
-        <div class="pi-health-bar" id="pi-health-card">
-          <div class="pi-health-label">🖥️ <span id="health-subtitle">Pi Health</span></div>
-          <div class="pi-health-metrics">
-            <div class="pi-metric">
-              <span class="pi-metric-name">CPU</span>
-              <div class="progress-bar pi-bar">
-                <div class="progress-fill" id="health-cpu-bar" style="width:0%"></div>
-              </div>
-              <span class="pi-metric-val" id="health-cpu-pct">—</span>
-            </div>
-            <div class="pi-metric">
-              <span class="pi-metric-name">RAM</span>
-              <div class="progress-bar pi-bar">
-                <div class="progress-fill" id="health-ram-bar" style="width:0%"></div>
-              </div>
-              <span class="pi-metric-val" id="health-ram-pct">—</span>
-            </div>
-            <div class="pi-metric">
-              <span class="pi-metric-name">Disk</span>
-              <div class="progress-bar pi-bar">
-                <div class="progress-fill" id="health-disk-bar" style="width:0%"></div>
-              </div>
-              <span class="pi-metric-val" id="health-disk-pct">—</span>
-            </div>
-            <div class="pi-metric pi-temp">
-              🌡️ <span id="health-temp-big" style="font-weight:700;color:var(--accent-primary)">—</span>
-            </div>
-          </div>
-          <span class="badge" id="health-ram-badge" style="margin-left:auto;flex-shrink:0">—</span>
         </div>
 
         <!-- Group Summary Cards -->

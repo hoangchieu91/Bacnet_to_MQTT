@@ -37,6 +37,13 @@ class BacnetService:
         self._network: Any = None
         self._connected = False
         self._devices: dict[int, BacnetDevice] = {}
+        self._device_names: dict[int, str] = {}  # cached device names
+        self._name_task: Any = None  # background name reading task
+        self._read_lock = asyncio.Lock()  # prevent concurrent BACnet reads
+        # COV: per-instance subscription tracking
+        # NOTE: This is polling-based COV simulation (not true BACnet SubscribeCOV service).
+        # True COV requires BACpypes3 SubscribeCOVRequest which is a future enhancement.
+        self._cov_callbacks: dict[str, Any] = {}  # key: "address:type:instance"
 
     # ── lifecycle ──────────────────────────────
     async def start(self) -> None:
@@ -60,6 +67,27 @@ class BacnetService:
                 ip=ip_str,
                 port=self._config.port,
             )
+
+            # Wait for BACpypes3 transport tasks to complete
+            await asyncio.sleep(2)
+
+            # Restore broadcast socket patch (vital for gateway operation)
+            try:
+                app = self._network.this_application.app
+                for oid, ll in app.link_layers.items():
+                    server = ll.server
+                    if not hasattr(server, '_local_transport_ready'):
+                        continue
+                    if server.broadcast_protocol and server.local_protocol:
+                        # Key fix: broadcast responses should be tagged as
+                        # arriving at our local address, not as broadcasts
+                        old_dest = server.broadcast_protocol.destination
+                        server.broadcast_protocol.destination = server.local_protocol.destination
+                        logger.info("✅ Broadcast protocol destination changed: %s → %s",
+                                    old_dest, server.broadcast_protocol.destination)
+            except Exception as e:
+                logger.warning("Failed to patch broadcast destination: %s", e)
+
             self._connected = True
             logger.info("BACnet service started on %s:%s", ip_str or 'auto', self._config.port)
         except Exception as exc:
@@ -148,21 +176,16 @@ class BacnetService:
 
         devices: list[BacnetDevice] = []
         try:
-            # Send WHO-IS based on scan mode
-            if scan_mode == "specific" and device_id is not None:
-                logger.info("Scanning for specific device ID: %d", device_id)
-                try:
-                    await self._network.who_is(device_id, device_id)
-                except Exception:
-                    self._network.discover(global_broadcast=False)
-            elif scan_mode == "range" and low_id is not None and high_id is not None:
-                logger.info("Scanning device ID range: %d – %d", low_id, high_id)
-                try:
-                    await self._network.who_is(low_id, high_id)
-                except Exception:
-                    self._network.discover(global_broadcast=True)
-            else:
-                logger.info("Full network scan (broadcast WHO-IS)")
+            existing = self._network.discoveredDevices or {}
+            need_scan = True
+
+            # For range/specific: if we already have cached devices, skip scan
+            if scan_mode in ("range", "specific") and len(existing) > 0:
+                logger.info("Using %d cached devices for %s filter", len(existing), scan_mode)
+                need_scan = False
+
+            if need_scan:
+                logger.info("Running BAC0 discover (mode=%s, timeout=%ds)", scan_mode, timeout)
                 try:
                     self._network.discover(global_broadcast=True)
                 except TypeError:
@@ -172,50 +195,90 @@ class BacnetService:
             await asyncio.sleep(timeout)
 
             # Get discovered devices from discoveredDevices dict
-            # (net.devices async property is broken in BAC0 2025.09.15 — returns None)
             discovered_dict = self._network.discoveredDevices or {}
-            logger.info("Raw discoveredDevices: %s", discovered_dict)
+            total = len(discovered_dict)
+            logger.info("Found %d raw devices (mode=%s)", total, scan_mode)
 
-            for key, info in discovered_dict.items():
-                try:
-                    # key format: 'device,703'
-                    # info format: {'object_instance': (ObjectType.device, 703),
-                    #               'address': IPv4Address('10.25.7.117'),
-                    #               'vendor_id': 36, 'vendor_name': 'unknown'}
-                    obj_inst = info.get("object_instance", (None, 0))
-                    if isinstance(obj_inst, (list, tuple)) and len(obj_inst) >= 2:
-                        instance = int(obj_inst[1])
-                    else:
-                        instance = int(obj_inst) if obj_inst else 0
+            # Filter by range/specific if applicable (in case broadcast was used)
+            filtered_items = []
+            for key, info in list(discovered_dict.items()):
+                obj_inst = info.get("object_instance", (None, 0))
+                if isinstance(obj_inst, (list, tuple)) and len(obj_inst) >= 2:
+                    instance = int(obj_inst[1])
+                else:
+                    instance = int(obj_inst) if obj_inst else 0
 
-                    address = str(info.get("address", ""))
-                    vendor_name = str(info.get("vendor_name", ""))
-                    vendor_id = info.get("vendor_id", None)
+                if scan_mode == "specific" and device_id is not None:
+                    if instance != device_id:
+                        continue
+                elif scan_mode == "range" and low_id is not None and high_id is not None:
+                    if instance < low_id or instance > high_id:
+                        continue
 
-                    # Try to read device name
-                    name = ""
-                    try:
-                        name = await self._network.read(f"{address} device {instance} objectName")
-                        name = str(name) if name else ""
-                    except Exception:
-                        name = key  # fallback to 'device,703'
+                filtered_items.append((key, info, instance))
 
-                    device = BacnetDevice(
-                        device_id=instance,
-                        device_name=name,
-                        address=address,
-                        vendor_name=vendor_name if vendor_name != "unknown" else f"Vendor {vendor_id}",
-                    )
-                    devices.append(device)
-                    self._devices[instance] = device
-                except Exception as e:
-                    logger.warning("Error parsing device: %s (%s)", key, e)
+            logger.info("Filtered to %d devices (from %d raw)", len(filtered_items), total)
+
+            # Build device list with cached names (read on-demand via /api/bacnet/devices/{id}/name)
+            for key, info, instance in filtered_items:
+                address = str(info.get("address", ""))
+                vendor_name = str(info.get("vendor_name", ""))
+                vendor_id = info.get("vendor_id", None)
+
+                # Parse network ID from address (e.g. "1600:3" → "1600")
+                network_id = ""
+                if ":" in address and not address.startswith("["):
+                    parts = address.split(":")
+                    if len(parts) == 2 and parts[0].isdigit():
+                        network_id = parts[0]
+
+                name = self._device_names.get(instance, f"Device {instance}")
+                device = BacnetDevice(
+                    device_id=instance,
+                    device_name=name,
+                    address=address,
+                    vendor_name=vendor_name if vendor_name != "unknown" else f"Vendor {vendor_id}",
+                    network_id=network_id,
+                )
+                devices.append(device)
+                self._devices[instance] = device
 
             logger.info("Discovered %d BACnet devices (mode=%s).", len(devices), scan_mode)
+
         except Exception as exc:
             logger.error("Discovery failed: %s", exc)
 
         return devices
+
+    async def read_device_name(self, device_id: int) -> str:
+        """Read a single device's objectName on-demand. Caches the result."""
+        if device_id in self._device_names:
+            return self._device_names[device_id]
+
+        device = self._devices.get(device_id)
+        if not device or not self._connected:
+            return f"Device {device_id}"
+
+        try:
+            name = await self._network.read(
+                f"{device.address} device {device_id} objectName"
+            )
+            if name:
+                name_str = str(name)
+                self._device_names[device_id] = name_str
+                device.device_name = name_str
+                return name_str
+        except Exception:
+            pass
+        return f"Device {device_id}"
+
+    async def read_device_names_batch(self, device_ids: list[int]) -> dict[int, str]:
+        """Read names for a batch of devices sequentially. Keeps BAC0 queue clear."""
+        results = {}
+        for did in device_ids:
+            name = await self.read_device_name(did)
+            results[did] = name
+        return results
 
     # ── read ───────────────────────────────────
     async def read_object(
@@ -356,7 +419,6 @@ class BacnetService:
             return None  # Object doesn't support eventState
 
     # ── COV (Change of Value) Subscription ─────
-    _cov_callbacks: dict[str, Any] = {}  # key: "address:type:instance"
 
     async def subscribe_cov(
         self,
@@ -446,28 +508,73 @@ class BacnetService:
         return props
 
     async def read_object_list(self, address: str, device_id: int) -> list[BacnetObject]:
-        """Read the object list of a device."""
+        """Read the object list of a device.
+        Falls back to index-based reads if full list fails.
+        Uses direct await (no asyncio.wait_for) to avoid corrupting BAC0 internals.
+        """
         if not self._connected or self._network is None:
             raise RuntimeError("BACnet service not started")
 
+        is_mstp = ":" in address and not address.startswith("[") and "." not in address
+
         objects: list[BacnetObject] = []
         try:
-            request_str = f"{address} device {device_id} objectList"
-            obj_list = await self._network.read(request_str)
+            logger.info("Reading object list for device %d at %s (MSTP=%s)",
+                        device_id, address, is_mstp)
+
+            # Try full objectList read (BAC0 handles its own internal timeout)
+            obj_list = None
+            try:
+                obj_list = await self._network.read(
+                    f"{address} device {device_id} objectList"
+                )
+            except Exception as e:
+                logger.warning("Full objectList read failed for %d: %s. Trying index-based...", device_id, e)
+
+            # Fallback: read objectList by index
+            if not obj_list:
+                obj_list = []
+                for idx in range(1, 200):
+                    try:
+                        item = await self._network.read(
+                            f"{address} device {device_id} objectList {idx}"
+                        )
+                        if item is None:
+                            break
+                        obj_list.append(item)
+                    except Exception:
+                        break
+                if obj_list:
+                    logger.info("Index-based read got %d objects for device %d", len(obj_list), device_id)
 
             if obj_list:
-                for obj_type, obj_inst in obj_list:
-                    obj_type_str = str(obj_type)
-                    obj = BacnetObject(
-                        object_type=obj_type_str,
-                        object_instance=obj_inst,
-                    )
+                raw_objects = []
+                for item in obj_list:
+                    if isinstance(item, (list, tuple)) and len(item) >= 2:
+                        raw_objects.append((str(item[0]), item[1]))
+                    else:
+                        try:
+                            otype = getattr(item, 'objectType', None) or str(item[0]) if hasattr(item, '__getitem__') else str(item)
+                            oinst = getattr(item, 'objectInstance', None) or (item[1] if hasattr(item, '__getitem__') else 0)
+                            raw_objects.append((str(otype), int(oinst)))
+                        except Exception as e:
+                            logger.debug("Skip unparseable object: %s (%s)", item, e)
+
+                logger.info("Device %d: %d objects found, reading names...", device_id, len(raw_objects))
+
+                # Read names sequentially (avoid BAC0 queue saturation)
+                for ot, oi in raw_objects:
+                    name = ""
                     try:
-                        name = await self._network.read(f"{address} {obj_type_str} {obj_inst} objectName")
-                        obj.object_name = str(name) if name else ""
+                        n = await self._network.read(f"{address} {ot} {oi} objectName")
+                        name = str(n) if n else ""
                     except Exception:
                         pass
-                    objects.append(obj)
+                    objects.append(BacnetObject(
+                        object_type=ot,
+                        object_instance=oi,
+                        object_name=name,
+                    ))
 
             logger.info("Read %d objects from device %d", len(objects), device_id)
         except Exception as exc:
@@ -485,20 +592,40 @@ class BacnetService:
         priority: int = 16,
     ) -> tuple[bool, str]:
         """Write a value to a BACnet object at the given priority (1–16).
-        Returns (success, error_message)."""
+        Returns (success, error_message).
+        
+        NOTE: We call BAC0's internal _write() directly (with await) instead of
+        the public write() method, because write() is fire-and-forget (DoOnce task)
+        and always returns before the BACnet write actually completes.
+        """
         if not self._connected or self._network is None:
             return False, "BACnet service not started"
 
         try:
             ot = _normalize_type(object_type)
             request_str = f"{address} {ot} {object_instance} presentValue {value} - {priority}"
-            self._network.write(request_str)
-            logger.info("Write OK: %s %s %d = %s @priority %d",
-                        address, object_type, object_instance, value, priority)
+            logger.info("Write request (awaited): %s", request_str)
+            # Use _write (async) directly — write() is fire-and-forget!
+            response = await self._network._write(request_str)
+            logger.info("Write response: %s %s %d = %s @P%d -> %s",
+                        address, object_type, object_instance, value, priority, response)
             return True, ""
         except Exception as exc:
-            logger.error("Write failed: %s", exc)
-            return False, str(exc)
+            err_msg = str(exc)
+            logger.error("Write failed for %s %s %d = %s @P%d: %s",
+                         address, object_type, object_instance, value, priority, err_msg)
+            # Provide user-friendly error messages
+            if 'writeAccessDenied' in err_msg or 'readOnly' in err_msg.lower():
+                return False, "Write Access Denied — point is read-only"
+            if 'unknownProperty' in err_msg:
+                return False, "Object does not support writing"
+            if 'invalidDataType' in err_msg:
+                return False, "Invalid value format for this object type"
+            if 'NoResponseFromController' in err_msg or 'no response' in err_msg.lower():
+                return False, "No response from device — check network connection"
+            if 'Abort' in err_msg:
+                return False, f"Device aborted write: {err_msg}"
+            return False, err_msg
 
     # ── release ────────────────────────────────
     async def release_priority(
@@ -513,8 +640,11 @@ class BacnetService:
             raise RuntimeError("BACnet service not started")
 
         try:
-            request_str = f"{address} {object_type} {object_instance} presentValue null - {priority}"
-            self._network.write(request_str)
+            ot = _normalize_type(object_type)
+            request_str = f"{address} {ot} {object_instance} presentValue null - {priority}"
+            logger.info("Release request (awaited): %s", request_str)
+            # Use _write (async) directly — write() is fire-and-forget!
+            await self._network._write(request_str)
             logger.info("Release OK: %s %s %d @priority %d",
                         address, object_type, object_instance, priority)
             return True

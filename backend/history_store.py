@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -44,6 +45,8 @@ class HistoryStore:
         self._record_count = 0  # rough in-memory counter for fast checks
         self._event_count = 0
         self.max_events = 10_000
+        # RLock: reentrant so that methods calling each other (e.g. record → ring_buffer) don't deadlock
+        self._write_lock = threading.RLock()
 
     # ── Init / Close ──────────────────────────
     def init(self) -> None:
@@ -114,35 +117,36 @@ class HistoryStore:
         if self._conn is None:
             return
 
-        # Check DB size limit (~every 100 records)
-        if self._record_count % 100 == 0:
-            db_size = self._get_db_size_mb()
-            if db_size > self.max_db_size_mb:
-                logger.warning(
-                    "DB size %.1fMB > limit %dMB — purging oldest 10%%",
-                    db_size, self.max_db_size_mb,
-                )
-                self._purge_oldest_global(percent=10)
+        with self._write_lock:
+            # Check DB size limit (~every 100 records)
+            if self._record_count % 100 == 0:
+                db_size = self._get_db_size_mb()
+                if db_size > self.max_db_size_mb:
+                    logger.warning(
+                        "DB size %.1fMB > limit %dMB — purging oldest 10%%",
+                        db_size, self.max_db_size_mb,
+                    )
+                    self._purge_oldest_global(percent=10)
 
-        # Store numeric if possible, else text
-        value_num = None
-        value_text = None
-        try:
-            value_num = float(value)
-        except (TypeError, ValueError):
-            value_text = str(value) if value is not None else None
+            # Store numeric if possible, else text
+            value_num = None
+            value_text = None
+            try:
+                value_num = float(value)
+            except (TypeError, ValueError):
+                value_text = str(value) if value is not None else None
 
-        ts = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "INSERT INTO point_history (mapping_id, value, value_text, timestamp) VALUES (?, ?, ?, ?)",
-            (mapping_id, value_num, value_text, ts),
-        )
-        self._conn.commit()
-        self._record_count += 1
+            ts = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                "INSERT INTO point_history (mapping_id, value, value_text, timestamp) VALUES (?, ?, ?, ?)",
+                (mapping_id, value_num, value_text, ts),
+            )
+            self._conn.commit()
+            self._record_count += 1
 
-        # Ring buffer: check per-point count (every 50 inserts to reduce overhead)
-        if self._record_count % 50 == 0:
-            self._apply_ring_buffer(mapping_id)
+            # Ring buffer: check per-point count (every 50 inserts to reduce overhead)
+            if self._record_count % 50 == 0:
+                self._apply_ring_buffer(mapping_id)
 
     def _apply_ring_buffer(self, mapping_id: str) -> None:
         """Delete oldest records for a point if exceeding max_records_per_point."""
@@ -171,15 +175,16 @@ class HistoryStore:
         """Purge oldest N% of all records to free space."""
         if self._conn is None:
             return
-        to_delete = max(1, self._record_count * percent // 100)
-        self._conn.execute(
-            "DELETE FROM point_history WHERE id IN (SELECT id FROM point_history ORDER BY timestamp ASC LIMIT ?)",
-            (to_delete,),
-        )
-        self._conn.execute("PRAGMA incremental_vacuum(1000)")
-        self._conn.commit()
-        self._record_count = max(0, self._record_count - to_delete)
-        logger.info("Global purge: deleted %d records", to_delete)
+        with self._write_lock:
+            to_delete = max(1, self._record_count * percent // 100)
+            self._conn.execute(
+                "DELETE FROM point_history WHERE id IN (SELECT id FROM point_history ORDER BY timestamp ASC LIMIT ?)",
+                (to_delete,),
+            )
+            self._conn.execute("PRAGMA incremental_vacuum(1000)")
+            self._conn.commit()
+            self._record_count = max(0, self._record_count - to_delete)
+            logger.info("Global purge: deleted %d records", to_delete)
 
     # ── Query ─────────────────────────────────
     def query(
@@ -286,22 +291,23 @@ class HistoryStore:
         """Purge history for a specific mapping. keep_count=0 means delete all."""
         if self._conn is None:
             return 0
-        if keep_count > 0:
-            deleted = self._conn.execute(
-                """DELETE FROM point_history WHERE mapping_id = ? AND id NOT IN (
-                    SELECT id FROM point_history WHERE mapping_id = ?
-                    ORDER BY timestamp DESC LIMIT ?
-                )""",
-                (mapping_id, mapping_id, keep_count),
-            ).rowcount
-        else:
-            deleted = self._conn.execute(
-                "DELETE FROM point_history WHERE mapping_id = ?",
-                (mapping_id,),
-            ).rowcount
-        self._conn.commit()
-        self._record_count = max(0, self._record_count - deleted)
-        return deleted
+        with self._write_lock:
+            if keep_count > 0:
+                deleted = self._conn.execute(
+                    """DELETE FROM point_history WHERE mapping_id = ? AND id NOT IN (
+                        SELECT id FROM point_history WHERE mapping_id = ?
+                        ORDER BY timestamp DESC LIMIT ?
+                    )""",
+                    (mapping_id, mapping_id, keep_count),
+                ).rowcount
+            else:
+                deleted = self._conn.execute(
+                    "DELETE FROM point_history WHERE mapping_id = ?",
+                    (mapping_id,),
+                ).rowcount
+            self._conn.commit()
+            self._record_count = max(0, self._record_count - deleted)
+            return deleted
 
     # ── Periodic cleanup ──────────────────────
     async def start_cleanup_loop(self, interval_minutes: int = 60) -> None:
@@ -320,15 +326,16 @@ class HistoryStore:
         """Delete records older than retention_days."""
         if self._conn is None:
             return
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
-        deleted = self._conn.execute(
-            "DELETE FROM point_history WHERE timestamp < ?", (cutoff,)
-        ).rowcount
-        if deleted > 0:
-            self._conn.execute("PRAGMA incremental_vacuum(500)")
-            self._conn.commit()
-            self._record_count = max(0, self._record_count - deleted)
-            logger.info("Retention cleanup: deleted %d records older than %d days", deleted, self.retention_days)
+        with self._write_lock:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
+            deleted = self._conn.execute(
+                "DELETE FROM point_history WHERE timestamp < ?", (cutoff,)
+            ).rowcount
+            if deleted > 0:
+                self._conn.execute("PRAGMA incremental_vacuum(500)")
+                self._conn.commit()
+                self._record_count = max(0, self._record_count - deleted)
+                logger.info("Retention cleanup: deleted %d records older than %d days", deleted, self.retention_days)
 
     # ── Event Log ─────────────────────────────
     def log_event(
@@ -344,18 +351,19 @@ class HistoryStore:
         """Log an event to the event_log table."""
         if self._conn is None:
             return
-        ts = datetime.now(timezone.utc).isoformat()
-        data_json = json.dumps(data) if data else None
-        self._conn.execute(
-            "INSERT INTO event_log (timestamp, event_type, device_id, mapping_id, severity, message, data_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (ts, event_type, device_id, mapping_id, severity, message, data_json),
-        )
-        self._conn.commit()
-        self._event_count += 1
-        # Ring buffer for events
-        if self._event_count > self.max_events and self._event_count % 100 == 0:
-            self._purge_old_events()
+        with self._write_lock:
+            ts = datetime.now(timezone.utc).isoformat()
+            data_json = json.dumps(data) if data else None
+            self._conn.execute(
+                "INSERT INTO event_log (timestamp, event_type, device_id, mapping_id, severity, message, data_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (ts, event_type, device_id, mapping_id, severity, message, data_json),
+            )
+            self._conn.commit()
+            self._event_count += 1
+            # Ring buffer for events
+            if self._event_count > self.max_events and self._event_count % 100 == 0:
+                self._purge_old_events()
 
     def query_events(
         self,

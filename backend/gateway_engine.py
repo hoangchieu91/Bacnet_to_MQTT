@@ -15,6 +15,11 @@ from backend.models import GatewayStatus, PointMapping
 from backend.mqtt_service import MqttService
 from backend.websocket_manager import WebSocketManager
 
+try:
+    from backend.anomaly_engine import AnomalyEngine
+except ImportError:
+    AnomalyEngine = None  # Graceful degradation if module missing
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +39,7 @@ class GatewayEngine:
         self._mqtt = mqtt
         self._ws = ws_manager
         self._history = history_store
+        self._anomaly: "AnomalyEngine | None" = None  # Set by main.py after init
 
         self._status = GatewayStatus.STOPPED
         self._start_time: float | None = None
@@ -47,10 +53,15 @@ class GatewayEngine:
         # Device status tracking: { device_id: { online, fail_count, last_seen, last_fail } }
         self._device_status: dict[int, dict] = {}
 
+        # BACnet read serializer — prevents concurrent reads saturating BAC0 queue
+        # Critical for MSTP networks where only one request can be in-flight
+        self._bacnet_read_lock = asyncio.Lock()
+
         # RAM health guardian
         self._ram_throttled = False
         self._ram_paused = False
         self._gc_counter = 0
+        self._ram_check_counter = 0  # Check RAM every 120 cycles (~60s at 0.5s sleep)
         self._RAM_WARN_PCT = 80
         self._RAM_THROTTLE_PCT = 90
         self._RAM_PAUSE_PCT = 95
@@ -107,11 +118,14 @@ class GatewayEngine:
 
         while self._running:
             try:
-                # RAM health check every cycle
-                ram_ok = self._check_ram_health()
-                if not ram_ok:
-                    await asyncio.sleep(5)  # Wait and re-check
-                    continue
+                # RAM health check every ~60s (120 cycles × 0.5s) to avoid /proc/meminfo I/O spam
+                self._ram_check_counter += 1
+                if self._ram_check_counter >= 120:
+                    self._ram_check_counter = 0
+                    ram_ok = self._check_ram_health()
+                    if not ram_ok:
+                        await asyncio.sleep(5)  # Wait and re-check
+                        continue
 
                 # Periodic GC (every 60 cycles ≈ 30 seconds)
                 self._gc_counter += 1
@@ -142,7 +156,9 @@ class GatewayEngine:
                         continue
 
                     last_poll[mapping.id] = now
-                    asyncio.create_task(self._poll_single(mapping))
+                    # Schedule poll but serialized through _bacnet_read_lock
+                    # This prevents BAC0 queue saturation on MSTP networks
+                    asyncio.create_task(self._poll_single_locked(mapping))
 
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -214,6 +230,16 @@ class GatewayEngine:
 
         except Exception:
             return True  # If /proc/meminfo fails, keep polling
+
+    async def _poll_single_locked(self, mapping: PointMapping) -> None:
+        """Wrapper that serializes BACnet reads through a shared lock.
+
+        On MSTP networks only one request can be in-flight at a time.
+        Without this lock, concurrent asyncio tasks would hammer BAC0's
+        internal queue and cause cascading no-response errors.
+        """
+        async with self._bacnet_read_lock:
+            await self._poll_single(mapping)
 
     async def _poll_single(self, mapping: PointMapping) -> None:
         """Read presentValue + priorityArray and publish to MQTT + WebSocket."""
@@ -345,6 +371,13 @@ class GatewayEngine:
                                 )
                 except (ValueError, TypeError):
                     pass  # Value not numeric, skip threshold check
+
+            # ── Scenario Anomaly Monitor ────────────────
+            if self._anomaly is not None:
+                try:
+                    asyncio.create_task(self._anomaly.evaluate(mapping.id, value))
+                except Exception as _ae:
+                    logger.debug("Anomaly evaluate error: %s", _ae)
 
             # Build MQTT topics
             prefix = self._cm.config.mqtt.topic_prefix
