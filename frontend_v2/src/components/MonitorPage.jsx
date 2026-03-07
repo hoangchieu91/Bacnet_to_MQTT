@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Loader2, Eye, Filter, Unlock } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { RefreshCw, Loader2, Eye, Unlock, TrendingUp, Activity, AlertTriangle, ArrowUpDown, BarChart2 } from 'lucide-react';
 
 const API = '/api';
 
@@ -9,6 +9,31 @@ const TYPE_SHORT = {
   multiStateInput: 'MSI', multiStateOutput: 'MSO', multiStateValue: 'MSV',
   'analog-input': 'AI', 'analog-output': 'AO', 'analog-value': 'AV',
   'binary-input': 'BI', 'binary-output': 'BO', 'binary-value': 'BV',
+  device: 'DEV',
+};
+
+const TYPE_COLOR = {
+  AI: 'bg-blue-500/15 text-blue-400', AO: 'bg-orange-500/15 text-orange-400',
+  AV: 'bg-cyan-500/15 text-cyan-400', BI: 'bg-green-500/15 text-green-400',
+  BO: 'bg-red-500/15 text-red-400', BV: 'bg-purple-500/15 text-purple-400',
+  MSI: 'bg-teal-500/15 text-teal-400', MSO: 'bg-pink-500/15 text-pink-400',
+  MSV: 'bg-indigo-500/15 text-indigo-400', DEV: 'bg-gray-500/15 text-gray-400',
+};
+
+// Priority level descriptions
+const PA_LABELS = {
+  1: 'Manual Life Safety', 2: 'Automatic Life Safety', 3: 'Avail 3', 4: 'Avail 4',
+  5: 'Critical Equip Control', 6: 'Min On/Off', 7: 'Avail 7', 8: 'Manual Operator',
+  9: 'Avail 9', 10: 'Avail 10', 11: 'Avail 11', 12: 'Avail 12',
+  13: 'Avail 13', 14: 'Avail 14', 15: 'Avail 15', 16: 'Fallback',
+};
+
+const PA_COLOR = (p) => {
+  if (p <= 2) return 'bg-red-500 text-white';
+  if (p <= 4) return 'bg-orange-500 text-white';
+  if (p <= 8) return 'bg-yellow-500 text-black';
+  if (p <= 12) return 'bg-blue-500 text-white';
+  return 'bg-gray-600 text-white';
 };
 
 export function MonitorPage() {
@@ -16,10 +41,15 @@ export function MonitorPage() {
   const [paData, setPaData] = useState({});
   const [loading, setLoading] = useState(false);
   const [loadingPA, setLoadingPA] = useState({});
-  const [filter, setFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
   const [groupFilter, setGroupFilter] = useState('ALL');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [expandedPA, setExpandedPA] = useState(null);
+  const [tab, setTab] = useState('values'); // 'values' | 'priority'
+  const [loadingAll, setLoadingAll] = useState(false);
   const intervalRef = useRef(null);
+  const paIntervalRef = useRef(null);
 
   const fetchMappings = useCallback(async () => {
     try {
@@ -29,179 +59,326 @@ export function MonitorPage() {
     } catch (e) { console.error(e); }
   }, []);
 
-  const fetchAllPA = useCallback(async (points) => {
-    const targets = points || mappings;
-    if (targets.length === 0) return;
-    setLoading(true);
-    const results = {};
-    await Promise.allSettled(targets.map(async m => {
-      try {
-        const res = await fetch(`${API}/bacnet/priority_array/${m.device_id}/${m.object_type}/${m.object_instance}`);
-        const data = await res.json();
-        results[m.id] = { pa: data.priority_array || {}, pv: data.present_value };
-      } catch (e) { /* skip */ }
-    }));
-    setPaData(prev => ({ ...prev, ...results }));
-    setLoading(false);
-  }, [mappings]);
-
   useEffect(() => {
     fetchMappings();
   }, [fetchMappings]);
 
   useEffect(() => {
+    clearInterval(intervalRef.current);
     if (autoRefresh) {
-      intervalRef.current = setInterval(() => fetchMappings(), 5000);
+      intervalRef.current = setInterval(fetchMappings, 5000);
     }
     return () => clearInterval(intervalRef.current);
   }, [autoRefresh, fetchMappings]);
 
-  const handleRefreshAllPA = () => fetchAllPA();
-  const handleRefreshSinglePA = async (m) => {
+  const loadAllPA = useCallback(async (targetMappings) => {
+    const targets = targetMappings || mappings;
+    const outputs = targets.filter(m => {
+      const ot = (m.object_type || '').toLowerCase();
+      return ot.includes('output') || ot.includes('value');
+    });
+    if (!outputs.length) return;
+    setLoadingAll(true);
+    const results = {};
+    await Promise.allSettled(outputs.map(async m => {
+      try {
+        const res = await fetch(`${API}/bacnet/priority_array/${m.device_id}/${m.object_type}/${m.object_instance}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        results[m.id] = { pa: data.priority_array || {}, pv: data.present_value };
+      } catch { /* skip */ }
+    }));
+    setPaData(prev => ({ ...prev, ...results }));
+    setLoadingAll(false);
+  }, [mappings]);
+
+  const loadSinglePA = async (m) => {
     setLoadingPA(prev => ({ ...prev, [m.id]: true }));
     try {
       const res = await fetch(`${API}/bacnet/priority_array/${m.device_id}/${m.object_type}/${m.object_instance}`);
       const data = await res.json();
       setPaData(prev => ({ ...prev, [m.id]: { pa: data.priority_array || {}, pv: data.present_value } }));
-    } catch (e) { /* skip */ }
+    } catch { /* skip */ }
     setLoadingPA(prev => ({ ...prev, [m.id]: false }));
   };
 
-  const handleRelinquishAll = async (m) => {
+  const relinquishAll = async (m) => {
+    if (!confirm(`Relinquish ALL priorities on ${m.label || m.object_instance}?`)) return;
     try {
       await fetch(`${API}/bacnet/release`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ device_id: m.device_id, object_type: m.object_type, object_instance: m.object_instance, priority: 'all' })
       });
-      setTimeout(() => handleRefreshSinglePA(m), 500);
+      setTimeout(() => loadSinglePA(m), 600);
     } catch (e) { console.error(e); }
   };
 
-  const groups = [...new Set(mappings.flatMap(m => (m.group || '').split(',').map(s => s.trim()).filter(Boolean)))];
-  const filtered = mappings.filter(m => {
-    if (filter && !(m.label || '').toLowerCase().includes(filter.toLowerCase()) && !String(m.object_instance).includes(filter)) return false;
-    if (groupFilter !== 'ALL' && !(m.group || '').includes(groupFilter)) return false;
-    return true;
-  });
+  const groups = useMemo(() => [...new Set(mappings.flatMap(m => (m.group || '').split(',').map(s => s.trim()).filter(Boolean)))], [mappings]);
+  const types = useMemo(() => [...new Set(mappings.map(m => TYPE_SHORT[m.object_type] || m.object_type?.slice(0,2)?.toUpperCase()).filter(Boolean))].sort(), [mappings]);
+
+  const filtered = useMemo(() => {
+    let list = mappings;
+    if (tab === 'priority') list = list.filter(m => {
+      const ot = (m.object_type || '').toLowerCase();
+      return ot.includes('output') || ot.includes('value');
+    });
+    if (typeFilter !== 'ALL') list = list.filter(m => (TYPE_SHORT[m.object_type] || '') === typeFilter);
+    if (groupFilter !== 'ALL') list = list.filter(m => (m.group || '').includes(groupFilter));
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter(m => (m.label || '').toLowerCase().includes(q) || String(m.object_instance).includes(q) || String(m.device_id).includes(q));
+    }
+    return list;
+  }, [mappings, search, typeFilter, groupFilter, tab]);
+
+  const polledCount = mappings.filter(m => m.last_value != null).length;
+  const paLoadedCount = Object.keys(paData).length;
+  const outputCount = mappings.filter(m => (m.object_type || '').toLowerCase().includes('output')).length;
+
+  const formatValue = (m) => {
+    const val = m.last_value;
+    if (val == null) return null;
+    const ot = (m.object_type || '').toLowerCase();
+    if (ot.includes('binary')) {
+      return val === 'active' || val === 1 || val === '1' ? { text: 'ACTIVE', cls: 'text-success' } : { text: 'INACTIVE', cls: 'text-text-muted' };
+    }
+    const num = parseFloat(val);
+    if (!isNaN(num)) return { text: num.toFixed(2), unit: m.units || '', cls: 'text-white' };
+    return { text: String(val), cls: 'text-white' };
+  };
+
+  const getAge = (ts) => {
+    if (!ts) return null;
+    const sec = Math.round((Date.now() - new Date(ts).getTime()) / 1000);
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.floor(sec/60)}m`;
+    return `${Math.floor(sec/3600)}h`;
+  };
 
   return (
-    <div className="p-6 flex flex-col h-screen">
-      <div className="flex items-center justify-between mb-4">
+    <div className="p-6 flex flex-col" style={{ height: 'calc(100vh - 0px)' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
             <Eye size={24} className="text-accent-primary" /> Live Monitor
           </h2>
-          <p className="text-xs text-text-muted mt-1">{filtered.length} points • {Object.keys(paData).length} with PA data</p>
+          <p className="text-xs text-text-muted mt-1">
+            <span className="text-white font-medium">{mappings.length}</span> points mapped&nbsp;·&nbsp;
+            <span className={polledCount > 0 ? 'text-success' : 'text-text-muted'}>{polledCount} polled</span>&nbsp;·&nbsp;
+            <span className="text-accent-primary">{paLoadedCount} with PA</span>
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-xs text-text-secondary cursor-pointer">
             <input type="checkbox" checked={autoRefresh} onChange={e => setAutoRefresh(e.target.checked)} className="accent-accent-primary" />
-            Auto-refresh
+            Auto-refresh 5s
           </label>
-          <button onClick={handleRefreshAllPA} disabled={loading}
-            className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-accent-primary to-purple-600 rounded-lg text-white text-xs font-medium disabled:opacity-50">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            Load All PA
-          </button>
+          <button onClick={fetchMappings} className="p-2 rounded-lg border border-border text-text-secondary hover:text-white transition-all"><RefreshCw size={14} /></button>
+          {tab === 'priority' && (
+            <button onClick={() => loadAllPA()} disabled={loadingAll}
+              className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-accent-primary to-purple-600 rounded-lg text-white text-xs font-medium disabled:opacity-50">
+              {loadingAll ? <Loader2 size={14} className="animate-spin" /> : <BarChart2 size={14} />}
+              Load All PA ({outputCount} outputs)
+            </button>
+          )}
         </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 mb-3 shrink-0 border-b border-border">
+        {[
+          { id: 'values', icon: Activity, label: 'Live Values' },
+          { id: 'priority', icon: ArrowUpDown, label: `Priority Array (${outputCount} outputs)` },
+        ].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 transition-all -mb-px ${tab === t.id ? 'border-accent-primary text-accent-primary' : 'border-transparent text-text-secondary hover:text-white'}`}>
+            <t.icon size={14} />{t.label}
+          </button>
+        ))}
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
-        <input type="text" placeholder="Search point..." value={filter} onChange={e => setFilter(e.target.value)}
-          className="px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white placeholder:text-text-muted w-48 focus:outline-none focus:border-border-focus" />
+      <div className="flex items-center gap-2 mb-3 flex-wrap shrink-0">
+        <input type="text" placeholder="Search label, instance, device..." value={search} onChange={e => setSearch(e.target.value)}
+          className="px-3 py-1.5 bg-bg-input border border-border rounded-lg text-sm text-white placeholder:text-text-muted w-56 focus:outline-none focus:border-border-focus" />
         <div className="flex gap-1 flex-wrap">
-          <button onClick={() => setGroupFilter('ALL')}
-            className={`px-2 py-1 rounded-full text-[10px] font-bold ${groupFilter === 'ALL' ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/40' : 'bg-bg-input border border-border text-text-secondary'}`}>
-            ALL
-          </button>
-          {groups.map(g => (
-            <button key={g} onClick={() => setGroupFilter(g)}
-              className={`px-2 py-1 rounded-full text-[10px] font-bold ${groupFilter === g ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/40' : 'bg-bg-input border border-border text-text-secondary'}`}>
-              {g}
-            </button>
+          <button onClick={() => setTypeFilter('ALL')} className={`px-2 py-1 rounded-full text-[10px] font-bold ${typeFilter === 'ALL' ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/40' : 'bg-bg-input border border-border text-text-secondary hover:text-white'}`}>ALL</button>
+          {types.map(t => (
+            <button key={t} onClick={() => setTypeFilter(typeFilter === t ? 'ALL' : t)} className={`px-2 py-1 rounded-full text-[10px] font-bold ${typeFilter === t ? 'bg-accent-primary/20 text-accent-primary border border-accent-primary/40' : 'bg-bg-input border border-border text-text-secondary hover:text-white'}`}>{t}</button>
           ))}
         </div>
+        {groups.length > 0 && (
+          <div className="flex gap-1 flex-wrap border-l border-border pl-2">
+            {groups.map(g => (
+              <button key={g} onClick={() => setGroupFilter(groupFilter === g ? 'ALL' : g)} className={`px-2 py-1 rounded-full text-[10px] ${groupFilter === g ? 'bg-purple-500/20 text-purple-400 border border-purple-500/40' : 'bg-bg-input border border-border text-text-secondary hover:text-white'}`}>{g}</button>
+            ))}
+          </div>
+        )}
+        <span className="ml-auto text-[10px] text-text-muted">{filtered.length} showing</span>
       </div>
 
-      {/* Monitor Grid */}
-      <div className="flex-1 overflow-y-auto space-y-2 min-h-[300px]">
-        {filtered.map(m => {
-          const pa = paData[m.id];
-          const pv = pa ? pa.pv : m.last_value;
-          const paArr = pa ? pa.pa : {};
-          const actives = Object.entries(paArr).filter(([, v]) => v != null && v !== 'null');
-          const ot = (m.object_type || '').toLowerCase();
-          const isBinary = ot.includes('binary');
-          const label = m.label || `${m.object_type}:${m.object_instance}`;
-          const short = label.split(/[.\/\\]/).pop() || label;
-          const isLoadingPA = loadingPA[m.id];
+      {/* No mappings */}
+      {mappings.length === 0 && (
+        <div className="glass-card p-10 text-center">
+          <Activity size={36} className="mx-auto text-text-muted mb-3 opacity-40" />
+          <p className="text-text-secondary text-sm mb-1">No points configured</p>
+          <p className="text-text-muted text-xs">Go to Devices → select points → Add to mappings first</p>
+        </div>
+      )}
 
-          return (
-            <div key={m.id} className="glass-card px-4 py-3 flex items-center gap-3">
-              {/* Type badge */}
-              <span className="px-1.5 py-0.5 rounded bg-info/15 text-info text-[10px] font-bold min-w-[28px] text-center">
-                {TYPE_SHORT[m.object_type] || m.object_type?.slice(0, 3)?.toUpperCase()}
-              </span>
-
-              {/* Label */}
-              <div className="min-w-[160px]">
-                <div className="text-sm font-medium text-white truncate">{short}</div>
-                <div className="text-[10px] text-text-muted">Dev {m.device_id} • Inst {m.object_instance}</div>
-              </div>
-
-              {/* Present Value */}
-              <div className="min-w-[100px] text-right">
-                <span className={`text-sm font-bold ${isBinary ? (pv === 'active' || pv === 1 ? 'text-success' : 'text-error') : 'text-white'}`}>
-                  {pv != null ? String(pv) : '—'}
-                </span>
-                {m.units && <span className="text-[10px] text-text-muted ml-1">{m.units}</span>}
-              </div>
-
-              {/* Mini PA indicator */}
-              <div className="flex-1 flex items-center gap-0.5 min-w-[200px]">
-                {Array.from({ length: 16 }, (_, i) => i + 1).map(p => {
-                  const val = paArr[String(p)];
-                  const active = val != null && val !== 'null';
+      {/* ── TAB: Live Values ── */}
+      {tab === 'values' && mappings.length > 0 && (
+        <div className="flex-1 overflow-y-auto">
+          {polledCount === 0 && (
+            <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-warning/5 border border-warning/20 rounded-lg text-xs text-warning">
+              <AlertTriangle size={12} />
+              <span>Gateway vừa khởi động. Các giá trị sẽ hiện sau vài giây khi có poll cycle đầu tiên. Tự động refresh mỗi 5s.</span>
+            </div>
+          )}
+          <div className="glass-card overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 z-10 bg-bg-secondary border-b border-border">
+                <tr>
+                  <th className="px-3 py-2.5 text-left font-bold text-text-muted">Type</th>
+                  <th className="px-3 py-2.5 text-left font-bold text-text-muted">Label</th>
+                  <th className="px-3 py-2.5 text-left font-bold text-text-muted">Device · Inst</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-text-muted">Value</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-text-muted">Updated</th>
+                  <th className="px-3 py-2.5 text-center font-bold text-text-muted">Poll</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(m => {
+                  const fv = formatValue(m);
+                  const age = getAge(m.last_updated);
+                  const ot = TYPE_SHORT[m.object_type] || m.object_type?.slice(0,2)?.toUpperCase() || '?';
+                  const isStale = m.last_updated && (Date.now() - new Date(m.last_updated).getTime()) > 60000;
                   return (
-                    <div key={p} title={`P${p}: ${active ? val : 'null'}`}
-                      className={`w-3 h-3 rounded-sm text-[6px] flex items-center justify-center font-bold ${active ? 'bg-success/60 text-white' : 'bg-bg-input/60 text-transparent'}`}>
-                      {p}
-                    </div>
+                    <tr key={m.id} className="border-b border-border/30 hover:bg-white/[0.02] transition-colors">
+                      <td className="px-3 py-2.5">
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${TYPE_COLOR[ot] || 'bg-gray-500/15 text-gray-400'}`}>{ot}</span>
+                      </td>
+                      <td className="px-3 py-2.5 text-text-primary font-medium max-w-[220px] truncate">{m.label || `${m.object_type}:${m.object_instance}`}</td>
+                      <td className="px-3 py-2.5 text-text-muted font-mono">{m.device_id} · {m.object_instance}</td>
+                      <td className="px-3 py-2.5 text-right">
+                        {fv ? (
+                          <span className={`font-bold ${fv.cls}`}>{fv.text}{fv.unit ? <span className="text-text-muted ml-1 font-normal text-[10px]">{fv.unit}</span> : null}</span>
+                        ) : (
+                          <span className="text-text-muted italic">waiting…</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {age ? <span className={`text-[10px] ${isStale ? 'text-warning' : 'text-text-muted'}`}>{age} ago</span> : <span className="text-text-muted text-[10px]">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <span className={`inline-block w-2 h-2 rounded-full ${m.enabled ? 'bg-success animate-pulse' : 'bg-bg-input'}`} title={m.enabled ? 'Polling' : 'Disabled'} />
+                      </td>
+                    </tr>
                   );
                 })}
-              </div>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-              {/* Active priorities text */}
-              <div className="min-w-[80px] text-right">
-                {actives.length > 0 ? (
-                  <span className="text-[10px] text-accent-primary font-bold">
-                    {actives.map(([p, v]) => `P${p}=${v}`).join(', ')}
-                  </span>
-                ) : pa ? (
-                  <span className="text-[10px] text-text-muted">No overrides</span>
-                ) : (
-                  <span className="text-[10px] text-text-muted italic">PA not loaded</span>
-                )}
-              </div>
-
-              {/* Actions */}
-              <div className="flex items-center gap-1">
-                <button onClick={() => handleRefreshSinglePA(m)} disabled={isLoadingPA}
-                  className="p-1 rounded hover:bg-bg-card text-text-muted hover:text-white disabled:opacity-50" title="Load PA">
-                  {isLoadingPA ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                </button>
-                {actives.length > 0 && (
-                  <button onClick={() => handleRelinquishAll(m)}
-                    className="p-1 rounded hover:bg-error/10 text-text-muted hover:text-error" title="Relinquish All">
-                    <Unlock size={12} />
-                  </button>
-                )}
-              </div>
+      {/* ── TAB: Priority Array ── */}
+      {tab === 'priority' && mappings.length > 0 && (
+        <div className="flex-1 overflow-y-auto space-y-1.5">
+          {paLoadedCount === 0 && (
+            <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-info/5 border border-info/20 rounded-lg text-xs text-info">
+              <BarChart2 size={12} />
+              <span>Click <b>Load All PA</b> để đọc Priority Array từ BACnet cho tất cả output points. Dữ liệu này cho biết AI/người vận hành nào đang override giá trị ở priority nào (1=cao nhất, 16=thấp nhất).</span>
             </div>
-          );
-        })}
-      </div>
+          )}
+          {filtered.map(m => {
+            const pa = paData[m.id];
+            const pvFromPA = pa ? pa.pv : null;
+            const pv = pvFromPA ?? m.last_value;
+            const paArr = pa ? pa.pa : {};
+            const actives = Object.entries(paArr).filter(([, v]) => v != null && v !== 'null' && v !== 'Null');
+            const isLoadingPA = loadingPA[m.id];
+            const ot = TYPE_SHORT[m.object_type] || m.object_type?.slice(0,2)?.toUpperCase() || '?';
+            const isExpanded = expandedPA === m.id;
+
+            return (
+              <div key={m.id} className="glass-card overflow-hidden">
+                {/* Row header */}
+                <div className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-white/[0.02]"
+                  onClick={() => setExpandedPA(isExpanded ? null : m.id)}>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 ${TYPE_COLOR[ot] || 'bg-gray-500/15 text-gray-400'}`}>{ot}</span>
+                  <span className="text-sm font-medium text-white flex-1 truncate">{m.label || `${m.object_type}:${m.object_instance}`}</span>
+                  <span className="text-[10px] text-text-muted font-mono shrink-0">{m.device_id}:{m.object_instance}</span>
+
+                  {/* Present value */}
+                  <span className={`text-sm font-bold min-w-[60px] text-right ${pv != null ? 'text-white' : 'text-text-muted'}`}>
+                    {pv != null ? String(pv) : '—'}
+                  </span>
+
+                  {/* Mini PA grid: 16 priority slots */}
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    {Array.from({length: 16}, (_, i) => i + 1).map(p => {
+                      const val = paArr[String(p)];
+                      const active = val != null && val !== 'null' && val !== 'Null';
+                      return (
+                        <div key={p} title={`P${p} ${PA_LABELS[p]}: ${active ? val : 'null'}`}
+                          className={`w-3.5 h-3.5 rounded-sm flex items-center justify-center text-[6px] font-bold transition-all ${active ? PA_COLOR(p) : 'bg-bg-input/40 text-transparent'}`}>
+                          {p}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Active count badge */}
+                  {actives.length > 0 && (
+                    <span className="px-1.5 py-0.5 rounded-full bg-warning/20 text-warning text-[10px] font-bold shrink-0">
+                      {actives.length} override{actives.length > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {pa && actives.length === 0 && <span className="text-[10px] text-success shrink-0">Clean</span>}
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                    <button onClick={() => loadSinglePA(m)} disabled={isLoadingPA} className="p-1 rounded hover:bg-bg-card text-text-muted hover:text-white disabled:opacity-50" title="Read PA from BACnet">
+                      {isLoadingPA ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    </button>
+                    {actives.length > 0 && (
+                      <button onClick={() => relinquishAll(m)} className="p-1 rounded hover:bg-error/10 text-error" title="Relinquish All">
+                        <Unlock size={12} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Expanded: full 16-level PA detail */}
+                {isExpanded && pa && (
+                  <div className="px-4 py-3 border-t border-border bg-bg-primary/40">
+                    <div className="text-[10px] text-text-muted mb-2 font-bold uppercase tracking-wider">Priority Array Detail (1 = highest)</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                      {Array.from({length: 16}, (_, i) => i + 1).map(p => {
+                        const val = paArr[String(p)];
+                        const active = val != null && val !== 'null' && val !== 'Null';
+                        return (
+                          <div key={p} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg ${active ? 'bg-warning/10 border border-warning/25' : 'bg-bg-input/30 border border-transparent'}`}>
+                            <span className={`text-[10px] font-bold w-5 h-5 rounded flex items-center justify-center shrink-0 ${active ? PA_COLOR(p) : 'bg-bg-input text-text-muted'}`}>{p}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[9px] text-text-muted truncate">{PA_LABELS[p]}</div>
+                              <div className={`text-[11px] font-bold truncate ${active ? 'text-warning' : 'text-text-muted/50'}`}>
+                                {active ? String(val) : 'null'}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
