@@ -53,6 +53,9 @@ class DeviceRegistry:
         self._data: dict[int, dict] = {}
         self._load()
 
+    # ─────────────────────────────────────────────
+    # Load / Save
+    # ─────────────────────────────────────────────
     def _load(self) -> None:
         if not self._path.exists():
             logger.info(f"DeviceRegistry: no registry at {self._path}, starting fresh")
@@ -76,7 +79,11 @@ class DeviceRegistry:
         except Exception as e:
             logger.error(f"DeviceRegistry: save failed: {e}")
 
+    # ─────────────────────────────────────────────
+    # Write
+    # ─────────────────────────────────────────────
     def upsert_device(self, device_id: int, **fields) -> None:
+        """Insert or update device metadata."""
         existing = self._data.get(device_id, {"device_id": device_id})
         existing.update(fields)
         existing["last_seen"] = datetime.now(timezone.utc).isoformat()
@@ -84,6 +91,7 @@ class DeviceRegistry:
         self._save()
 
     def upsert_objects(self, device_id: int, objects: list[dict]) -> None:
+        """Update the objects list for a device (replace entirely)."""
         if device_id not in self._data:
             self._data[device_id] = {"device_id": device_id}
         self._data[device_id]["objects"] = objects
@@ -97,7 +105,11 @@ class DeviceRegistry:
             return True
         return False
 
+    # ─────────────────────────────────────────────
+    # Read
+    # ─────────────────────────────────────────────
     def all_devices(self) -> list[dict]:
+        """Return all registered devices (sorted by device_id)."""
         return sorted(self._data.values(), key=lambda d: d.get("device_id", 0))
 
     def get_device(self, device_id: int) -> dict | None:

@@ -35,6 +35,7 @@ from backend.models import (
 from backend.mqtt_service import MqttService
 from backend.websocket_manager import WebSocketManager
 from backend.health_monitor import get_system_health, check_ram_for_new_points
+from backend.device_registry import DeviceRegistry
 
 # ── Logging setup ──────────────────────────────
 logging.basicConfig(
@@ -53,12 +54,13 @@ mqtt_service: MqttService | None = None
 gateway_engine: GatewayEngine | None = None
 history_store: HistoryStore | None = None
 scheduler_service: SchedulerService | None = None
+device_registry: DeviceRegistry | None = None
 
 
 # ── Lifespan (startup / shutdown) ──────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service
+    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry
 
     # Load config
     cfg = config_manager.load()
@@ -67,6 +69,10 @@ async def lifespan(app: FastAPI):
     history_store = HistoryStore()
     history_store.init()
 
+    # Initialise device registry (persistent)
+    device_registry = DeviceRegistry(path="data/device_registry.json")
+    logger.info(f"DeviceRegistry: {device_registry.total()} devices loaded from disk")
+
     # Initialise services
     bacnet_service = BacnetService(cfg.bacnet)
     mqtt_service = MqttService(cfg.mqtt)
@@ -74,6 +80,15 @@ async def lifespan(app: FastAPI):
         config_manager, bacnet_service, mqtt_service, ws_manager,
         history_store=history_store,
     )
+
+    # Initialize AnomalyEngine and wire to gateway
+    try:
+        from backend.anomaly_engine import AnomalyEngine
+        _anomaly_engine = AnomalyEngine(config_manager, history_store, mqtt_service)
+        gateway_engine._anomaly = _anomaly_engine
+        logger.info("AnomalyEngine initialized and wired to GatewayEngine.")
+    except Exception as ae_err:
+        logger.warning("AnomalyEngine init failed (non-critical): %s", ae_err)
 
     # Start MQTT (fire and forget — broker may not be reachable yet)
     try:
@@ -179,11 +194,16 @@ async def _auto_start_gateway():
 
 
 # ── FastAPI app ────────────────────────────────
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+_base = Path(__file__).resolve().parent.parent
+FRONTEND_V2_DIR = _base / "frontend_v2" / "dist"
+FRONTEND_LEGACY_DIR = _base / "frontend"
+
+# Use React V2 if built, else fall back to legacy vanilla frontend
+FRONTEND_DIR = FRONTEND_V2_DIR if (FRONTEND_V2_DIR / "index.html").exists() else FRONTEND_LEGACY_DIR
 
 app = FastAPI(
     title="BACnet-MQTT Gateway",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -200,10 +220,14 @@ app.add_middleware(
 async def serve_index():
     return FileResponse(FRONTEND_DIR / "index.html")
 
-
 # Mount static assets AFTER the root route
-app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
-app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
+if FRONTEND_DIR == FRONTEND_V2_DIR:
+    # React build: mount the assets dir
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
+else:
+    # Legacy vanilla: mount css and js
+    app.mount("/css", StaticFiles(directory=FRONTEND_DIR / "css"), name="css")
+    app.mount("/js", StaticFiles(directory=FRONTEND_DIR / "js"), name="js")
 
 
 # ═══════════════════════════════════════════════
@@ -224,6 +248,107 @@ async def get_status():
 @app.get("/api/health")
 async def get_health():
     return get_system_health()
+
+
+@app.get("/api/devices/health")
+async def get_devices_health():
+    """Return bulk health status of all known BACnet devices.
+    Merges discovered device list with live polling status from GatewayEngine.
+    Used by the Device Health tile grid in the frontend.
+    """
+    if not bacnet_service:
+        return {"devices": []}
+
+    poll_status = gateway_engine.get_device_status() if gateway_engine else {}
+    # Build a per-device point count index from mappings
+    point_counts: dict[int, int] = {}
+    for m in config_manager.mappings:
+        point_counts[m.device_id] = point_counts.get(m.device_id, 0) + 1
+
+    devices_out = []
+    for dev in bacnet_service.discovered_devices:
+        dev_id = dev.device_id
+        ps = poll_status.get(dev_id, {})
+        devices_out.append({
+            "device_id": dev_id,
+            "name": dev.device_name or f"Device {dev_id}",
+            "address": dev.address,
+            "online": ps.get("online", True),         # default True if never polled
+            "fail_count": ps.get("fail_count", 0),
+            "last_seen": ps.get("last_seen"),
+            "point_count": point_counts.get(dev_id, 0),
+        })
+
+    # Also include devices in mappings that weren't discovered (offline)
+    discovered_ids = {d.device_id for d in bacnet_service.discovered_devices}
+    for dev_id, count in point_counts.items():
+        if dev_id not in discovered_ids:
+            ps = poll_status.get(dev_id, {})
+            devices_out.append({
+                "device_id": dev_id,
+                "name": f"Device {dev_id}",
+                "address": None,
+                "online": ps.get("online", False),
+                "fail_count": ps.get("fail_count", 0),
+                "last_seen": ps.get("last_seen"),
+                "point_count": count,
+            })
+
+    devices_out.sort(key=lambda d: (not d["online"], d["device_id"]))
+    return {"devices": devices_out, "total": len(devices_out)}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Anomaly Monitor
+# ═══════════════════════════════════════════════
+def _get_anomaly() -> "AnomalyEngine | None":
+    """Helper to get the AnomalyEngine from the GatewayEngine."""
+    return getattr(gateway_engine, "_anomaly", None) if gateway_engine else None
+
+
+@app.get("/api/anomaly/rules")
+async def list_anomaly_rules():
+    ae = _get_anomaly()
+    return {"rules": ae.get_rules() if ae else []}
+
+
+@app.post("/api/anomaly/rules")
+async def create_anomaly_rule(rule: dict):
+    ae = _get_anomaly()
+    if not ae:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "AnomalyEngine not initialized"}, status_code=500)
+    created = ae.add_rule(rule)
+    return {"rule": created.__dict__}
+
+
+@app.put("/api/anomaly/rules/{rule_id}")
+async def update_anomaly_rule(rule_id: str, updates: dict):
+    ae = _get_anomaly()
+    if not ae:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "AnomalyEngine not initialized"}, status_code=500)
+    updated = ae.update_rule(rule_id, updates)
+    if not updated:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Rule not found"}, status_code=404)
+    return {"rule": updated.__dict__}
+
+
+@app.delete("/api/anomaly/rules/{rule_id}")
+async def delete_anomaly_rule(rule_id: str):
+    ae = _get_anomaly()
+    if not ae:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "AnomalyEngine not initialized"}, status_code=500)
+    deleted = ae.delete_rule(rule_id)
+    return {"deleted": deleted}
+
+
+@app.get("/api/anomaly/active")
+async def get_active_alarms():
+    ae = _get_anomaly()
+    return {"alarms": ae.get_active_alarms() if ae else []}
 
 
 # ═══════════════════════════════════════════════
@@ -327,10 +452,53 @@ async def discover_devices(req: DiscoveryRequest | None = None):
 
 
 @app.get("/api/bacnet/devices")
-async def list_devices():
-    if not bacnet_service:
-        return {"devices": []}
-    return {"devices": [d.model_dump() for d in bacnet_service.discovered_devices]}
+async def list_devices(source: str = "all"):
+    """
+    Return known BACnet devices.
+    source=all (default): merge registry (persistent) + live discovered devices
+    source=live: only currently discovered in-memory
+    source=registry: only from persistent registry
+    """
+    alive_ids: set[int] = set()
+    live_devices: dict[int, dict] = {}
+
+    if bacnet_service and source in ("all", "live"):
+        for d in bacnet_service.discovered_devices:
+            dev_dict = d.model_dump()
+            dev_dict["live"] = True
+            live_devices[d.device_id] = dev_dict
+            alive_ids.add(d.device_id)
+
+    result_map: dict[int, dict] = {}
+
+    # Start from registry (persistent baseline)
+    if device_registry and source in ("all", "registry"):
+        for dev in device_registry.all_devices():
+            result_map[dev["device_id"]] = {
+                **dev,
+                "live": dev["device_id"] in alive_ids,
+                "from_registry": True,
+            }
+
+    # Merge live — live data wins (fresher)
+    for dev_id, dev in live_devices.items():
+        if dev_id in result_map:
+            result_map[dev_id].update(dev)
+        else:
+            result_map[dev_id] = dev
+        # Save newly discovered device to registry in background
+        if device_registry:
+            device_registry.upsert_device(
+                dev_id,
+                device_name=dev.get("device_name", ""),
+                address=dev.get("address", ""),
+                vendor_name=dev.get("vendor_name", ""),
+                model_name=dev.get("model_name", ""),
+                network_id=dev.get("network_id", ""),
+            )
+
+    devices_out = sorted(result_map.values(), key=lambda d: d.get("device_id", 0))
+    return {"devices": devices_out, "total": len(devices_out), "live_count": len(alive_ids)}
 
 
 @app.get("/api/bacnet/configured-devices")
@@ -394,14 +562,125 @@ async def get_events(
 
 
 @app.get("/api/bacnet/devices/{device_id}/objects")
-async def list_objects(device_id: int):
+async def list_objects(device_id: int, refresh: bool = False):
+    """
+    Return object list for a device.
+    - By default: serve from registry cache (no BACnet read = network-friendly)
+    - If refresh=true OR cache empty: read from BACnet network and save to registry
+    """
+    # Serve from registry cache first
+    if device_registry and not refresh:
+        cached_objs = device_registry.get_objects(device_id)
+        if cached_objs:
+            return {"objects": cached_objs, "from_cache": True, "cache_size": len(cached_objs)}
+
+    # Need live read from BACnet
     if not bacnet_service:
+        # If no BACnet service, try registry anyway
+        if device_registry:
+            cached_objs = device_registry.get_objects(device_id)
+            if cached_objs:
+                return {"objects": cached_objs, "from_cache": True}
         return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+
     address = bacnet_service.get_device_address(device_id)
     if not address:
-        return JSONResponse({"error": f"Device {device_id} not found"}, status_code=404)
+        # Device not live — check registry for address
+        reg_dev = device_registry.get_device(device_id) if device_registry else None
+        if reg_dev and reg_dev.get("address"):
+            address = reg_dev["address"]
+        else:
+            return JSONResponse(
+                {"error": f"Device {device_id} not reachable. Start gateway and scan first."},
+                status_code=404,
+            )
+
     objects = await bacnet_service.read_object_list(address, device_id)
-    return {"objects": [o.model_dump() for o in objects]}
+    objects_dicts = [o.model_dump() for o in objects]
+
+    # Save to registry
+    if device_registry and objects_dicts:
+        device_registry.upsert_objects(device_id, objects_dicts)
+
+    return {"objects": objects_dicts, "from_cache": False}
+
+
+@app.post("/api/bacnet/devices/{device_id}/objects/refresh")
+async def refresh_device_objects(device_id: int):
+    """Force re-read objects from BACnet network and update registry."""
+    return await list_objects(device_id, refresh=True)
+
+
+@app.get("/api/bacnet/devices/{device_id}/name")
+async def read_device_name(device_id: int):
+    """Read a device's objectName on-demand (cached after first read)."""
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    name = await bacnet_service.read_device_name(device_id)
+    # Persist name to registry so it shows in device list
+    if device_registry and not name.startswith("Device "):
+        device_registry.upsert_device(device_id, device_name=name)
+    return {"device_id": device_id, "name": name}
+
+
+@app.post("/api/bacnet/devices/names")
+async def read_device_names(req: dict):
+    """Read names for a batch of device IDs (sequential, keeps BAC0 queue clear)."""
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    device_ids = req.get("device_ids", [])
+    if not device_ids or len(device_ids) > 20:
+        return JSONResponse({"error": "Provide 1-20 device_ids"}, status_code=400)
+    names = await bacnet_service.read_device_names_batch(device_ids)
+    return {"names": names}
+
+
+@app.get("/api/bacnet/diag/{device_id}")
+async def diagnose_device(device_id: int):
+    """Diagnose BAC0 read issues for a specific device."""
+    if not bacnet_service or not bacnet_service._network:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+
+    device = bacnet_service._devices.get(device_id)
+    if not device:
+        return JSONResponse({"error": f"Device {device_id} not found"}, status_code=404)
+
+    net = bacnet_service._network
+    addr = device.address
+    results = {"device_id": device_id, "address": addr, "tests": {}}
+
+    # 1. Check device_info_cache
+    try:
+        from bacpypes3.pdu import Address
+        device_address = Address(addr)
+        dic = await net.this_application.app.device_info_cache.get_device_info(device_address)
+        results["tests"]["device_info_cache"] = str(dic) if dic else "EMPTY"
+    except Exception as e:
+        results["tests"]["device_info_cache"] = f"ERROR: {e}"
+
+    # 2. Try unicast WHO-IS
+    try:
+        from bacpypes3.pdu import Address
+        iam_resp = await net.this_application.app.who_is(address=Address(addr))
+        results["tests"]["unicast_whois"] = str(iam_resp) if iam_resp else "NO RESPONSE"
+    except Exception as e:
+        results["tests"]["unicast_whois"] = f"ERROR: {e}"
+
+    # 3. Try BAC0 read with verbose error
+    try:
+        val = await net.read(f"{addr} device {device_id} objectName")
+        results["tests"]["read_objectName"] = str(val) if val else "EMPTY"
+    except Exception as e:
+        results["tests"]["read_objectName"] = f"ERROR: {type(e).__name__}: {e}"
+
+    # 4. Try readMultiple
+    try:
+        val = await net.readMultiple(f"{addr} device {device_id} objectName objectList")
+        results["tests"]["readMultiple"] = str(val) if val else "EMPTY"
+    except Exception as e:
+        results["tests"]["readMultiple"] = f"ERROR: {type(e).__name__}: {e}"
+
+    return results
 
 
 @app.post("/api/bacnet/write")

@@ -20,9 +20,13 @@ sshpass -p "$PI_PASS" rsync -avz --delete \
   --exclude='__pycache__' \
   --exclude='.git' \
   --exclude='data' \
+  --exclude='config/runtime_config.json' \
   --exclude='*.pyc' \
   --exclude='.agents' \
   --exclude='docs/pi_access.md' \
+  --exclude='node_modules' \
+  --exclude='frontend_v2/src' \
+  --exclude='frontend_v2/.git' \
   -e "ssh -o StrictHostKeyChecking=no" \
   ./ "$PI_USER@$PI_HOST:$PI_DIR/"
 

@@ -57,6 +57,9 @@ const Mapping = (() => {
   function updateFromWs(data) {
     const m = mappings.find(x => x.id === data.mapping_id);
     if (m) {
+      if (m.last_value !== data.value) {
+        m.last_updated = Date.now();
+      }
       m.last_value = data.value;
       if (data.priority_array) m.priority_array = data.priority_array;
       renderList();
@@ -128,6 +131,9 @@ const Mapping = (() => {
         valHtml = `${val}${units ? ' <span style="font-size:0.7rem;color:var(--text-muted)">' + units + '</span>' : ''}`;
       }
 
+      const isRecentlyUpdated = m.last_updated && (Date.now() - m.last_updated < 1000);
+      const flashClass = isRecentlyUpdated ? 'value-flash' : '';
+
       return `
       <div class="mapping-item ${isActive ? 'active' : ''}" 
            title="${escapeHtml(m.label || m.object_type + ':' + m.object_instance)}">
@@ -143,7 +149,7 @@ const Mapping = (() => {
             ${!m.enabled ? '<span style="color:#e74c3c">⏸</span>' : ''}
           </div>
         </div>
-        <div class="mi-value">${valHtml}</div>
+        <div class="mi-value ${flashClass}">${valHtml}</div>
       </div>`;
     }).join('');
   }

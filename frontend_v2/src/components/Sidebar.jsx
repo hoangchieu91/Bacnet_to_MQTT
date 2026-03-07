@@ -48,7 +48,6 @@ export function Sidebar() {
     return () => clearInterval(iv);
   }, []);
 
-  const isRunning = status?.gateway === 'running';
   const bacnetOk = status?.bacnet_connected;
   const mqttOk = status?.mqtt_connected;
 

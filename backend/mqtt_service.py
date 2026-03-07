@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 import paho.mqtt.client as mqtt
@@ -23,6 +25,9 @@ class MqttService:
         self._connected = False
         self._on_message_callback: Callable[[str, Any], None] | None = None
         self._lock = threading.Lock()
+        self._publish_executor = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="mqtt_pub"
+        )
 
     # ── lifecycle ──────────────────────────────
     def start(self) -> None:
@@ -56,6 +61,7 @@ class MqttService:
 
     def stop(self) -> None:
         """Disconnect and stop the MQTT loop."""
+        self._publish_executor.shutdown(wait=False)
         if self._client is not None:
             self._client.loop_stop()
             self._client.disconnect()
@@ -69,7 +75,11 @@ class MqttService:
 
     # ── publish ────────────────────────────────
     def publish(self, topic: str, payload: Any, qos: int | None = None, retain: bool | None = None) -> bool:
-        """Publish a message (dict will be JSON-serialised)."""
+        """Publish a message (dict will be JSON-serialised).
+
+        Fire-and-forget: does NOT block the asyncio event loop.
+        Paho's internal loop thread handles delivery acknowledgement.
+        """
         if not self._connected or self._client is None:
             logger.warning("MQTT not connected — skipping publish to %s", topic)
             return False
@@ -83,12 +93,21 @@ class MqttService:
         retain = retain if retain is not None else self._config.retain
 
         try:
-            result = self._client.publish(topic, payload, qos=qos, retain=retain)
-            result.wait_for_publish(timeout=5)
+            # paho's publish() is non-blocking; the internal loop thread
+            # handles retransmission and QoS ACKs — no wait_for_publish needed.
+            self._client.publish(topic, payload, qos=qos, retain=retain)
             return True
         except Exception as exc:
             logger.error("MQTT publish failed on %s: %s", topic, exc)
             return False
+
+    async def publish_async(self, topic: str, payload: Any, qos: int | None = None, retain: bool | None = None) -> bool:
+        """Async-safe publish — runs in executor if blocking confirmation needed."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._publish_executor,
+            lambda: self.publish(topic, payload, qos, retain),
+        )
 
     # ── subscribe ──────────────────────────────
     def subscribe(self, topic: str, callback: Callable[[str, Any], None] | None = None) -> None:
