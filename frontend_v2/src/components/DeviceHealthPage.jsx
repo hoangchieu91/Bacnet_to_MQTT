@@ -71,31 +71,156 @@ function DeviceTile({ device, onClick }) {
   );
 }
 
+const OBJ_TYPES = ['analogInput','analogOutput','analogValue','binaryInput','binaryOutput','binaryValue','multiStateInput','multiStateOutput','multiStateValue'];
+
 function DeviceModal({ device, onClose }) {
   if (!device) return null;
   const p = parseAddress(device.address);
+  const [tab, setTab] = useState('info');
+  const [form, setForm] = useState({
+    object_type: 'analogInput', object_instance: '', label: '',
+    mqtt_topic: '', poll_interval: 30, group: '', read_mode: 'poll',
+  });
+  const [saving, setSaving] = useState(false);
+  const [result, setResult] = useState(null); // {ok, msg}
+
+  const handleAdd = async () => {
+    if (!form.object_instance) { setResult({ ok: false, msg: 'Object Instance is required' }); return; }
+    setSaving(true); setResult(null);
+    try {
+      const payload = {
+        device_id: device.device_id,
+        object_type: form.object_type,
+        object_instance: parseInt(form.object_instance, 10),
+        label: form.label || `${form.object_type}:${form.object_instance}`,
+        mqtt_topic: form.mqtt_topic || null,
+        poll_interval: Number(form.poll_interval) || 30,
+        group: form.group || null,
+        read_mode: form.read_mode,
+        enabled: true,
+      };
+      const res = await fetch('/api/mappings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok && data.mapping) {
+        setResult({ ok: true, msg: `✓ Added: ${data.mapping.label || data.mapping.id}` });
+        setForm(f => ({ ...f, object_instance: '', label: '', mqtt_topic: '' }));
+      } else {
+        setResult({ ok: false, msg: data.detail || data.error || 'Failed to add' });
+      }
+    } catch (e) {
+      setResult({ ok: false, msg: String(e) });
+    }
+    setSaving(false);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-md mx-4">
+      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+        {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border">
           <div className="flex items-center gap-2">
             <StatusDot online={device.online} size="lg" />
-            <h3 className="font-bold text-white">Device #{device.device_id}</h3>
+            <div>
+              <h3 className="font-bold text-white text-sm">Device #{device.device_id}</h3>
+              <p className="text-[10px] text-text-muted truncate max-w-[260px]">{device.name || '—'}</p>
+            </div>
           </div>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-bg-input text-text-muted hover:text-white"><X size={16}/></button>
         </div>
-        <div className="p-6 grid grid-cols-2 gap-3">
-          {[['Name',device.name||'—'],['Network',p.network],['Address',device.address||'—'],['Node',p.node||'—'],
-            ['Status',device.online===true?'Online':device.online===false?'Offline':'Pending'],
-            ['Points',`${device.point_count||0} mapped`],['Fail Count',device.fail_count||0],['Last Seen',timeSince(device.last_seen)]]
-            .map(([k,v])=>(
-              <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
-                <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
-                <div className="text-sm font-medium text-white truncate">{String(v)}</div>
-              </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-border">
+          {[['info','📊 Info'],['add','➕ Add Point']].map(([k,lbl]) => (
+            <button key={k} onClick={() => { setTab(k); setResult(null); }}
+              className={`px-5 py-2.5 text-xs font-bold transition-colors ${tab===k ? 'text-accent-primary border-b-2 border-accent-primary' : 'text-text-muted hover:text-white'}`}>
+              {lbl}
+            </button>
           ))}
         </div>
+
+        {tab === 'info' ? (
+          <div className="p-5 grid grid-cols-2 gap-3">
+            {[['Name',device.name||'—'],['Network',p.network],['Address',device.address||'—'],['Node',p.node||'—'],
+              ['Status',device.online===true?'🟢 Online':device.online===false?'🔴 Offline':'⏳ Pending'],
+              ['Points',`${device.point_count||0} mapped`],['Fail Count',device.fail_count||0],['Last Seen',timeSince(device.last_seen)]]
+              .map(([k,v])=>(
+                <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
+                  <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
+                  <div className="text-sm font-medium text-white truncate">{String(v)}</div>
+                </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-5 space-y-3">
+            <p className="text-[11px] text-text-muted">Add a BACnet point mapping for <b className="text-white">Device #{device.device_id}</b></p>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Object Type */}
+              <div className="col-span-2">
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Type</label>
+                <select value={form.object_type} onChange={e => setForm(f=>({...f,object_type:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus">
+                  {OBJ_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+
+              {/* Object Instance */}
+              <div>
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Instance *</label>
+                <input type="number" min="0" placeholder="e.g. 1" value={form.object_instance}
+                  onChange={e => setForm(f=>({...f,object_instance:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+              </div>
+
+              {/* Poll interval */}
+              <div>
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Poll Interval (s)</label>
+                <input type="number" min="5" value={form.poll_interval}
+                  onChange={e => setForm(f=>({...f,poll_interval:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+              </div>
+
+              {/* Label */}
+              <div>
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Label</label>
+                <input type="text" placeholder="e.g. Room Temp" value={form.label}
+                  onChange={e => setForm(f=>({...f,label:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+              </div>
+
+              {/* Group */}
+              <div>
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Group</label>
+                <input type="text" placeholder="e.g. HVAC" value={form.group}
+                  onChange={e => setForm(f=>({...f,group:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+              </div>
+
+              {/* MQTT Topic */}
+              <div className="col-span-2">
+                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">MQTT Topic <span className="normal-case text-text-muted">(optional — auto if blank)</span></label>
+                <input type="text" placeholder="e.g. building/floor3/temp" value={form.mqtt_topic}
+                  onChange={e => setForm(f=>({...f,mqtt_topic:e.target.value}))}
+                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+              </div>
+            </div>
+
+            {result && (
+              <div className={`text-xs px-3 py-2 rounded-lg ${result.ok ? 'bg-success/10 text-success border border-success/30' : 'bg-error/10 text-error border border-error/30'}`}>
+                {result.msg}
+              </div>
+            )}
+
+            <button onClick={handleAdd} disabled={saving || !form.object_instance}
+              className="w-full py-2.5 rounded-xl font-bold text-sm bg-gradient-to-r from-accent-primary to-purple-600 text-white disabled:opacity-50 hover:opacity-90 transition-all flex items-center justify-center gap-2">
+              {saving ? '⏳ Adding...' : '➕ Add Point Mapping'}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
