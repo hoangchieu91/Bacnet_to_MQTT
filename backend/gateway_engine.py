@@ -599,6 +599,10 @@ class GatewayEngine:
         status["last_seen"] = datetime.now(timezone.utc).isoformat()
         status["address"] = address
 
+        # Persist last_seen to _known_devices so it survives restarts
+        if device_id in self._known_devices:
+            self._known_devices[device_id]["last_seen"] = status["last_seen"]
+
         if was_offline:
             logger.info("Device %d came ONLINE at %s", device_id, address)
             if self._history:
@@ -658,6 +662,17 @@ class GatewayEngine:
                     data = json.load(f)
                 self._known_devices = {int(k): v for k, v in data.items()}
                 logger.info("Loaded %d known devices from %s", len(self._known_devices), self._devices_file)
+                # Pre-populate _device_status for devices that have been seen before
+                # so UI shows online/offline immediately after restart (not pending)
+                for did, info in self._known_devices.items():
+                    if info.get("last_seen") and did not in self._device_status:
+                        self._device_status[did] = {
+                            "online": False,   # assume offline until ping confirms
+                            "fail_count": 0,
+                            "last_seen": info["last_seen"],
+                            "last_fail": None,
+                            "address": info.get("address"),
+                        }
         except Exception as e:
             logger.warning("Could not load known devices: %s", e)
             self._known_devices = {}
@@ -897,9 +912,12 @@ class GatewayEngine:
                             self._save_known_devices()
                         self._on_device_poll_success(dev_id, address)
                     else:
-                        ping_fails[dev_id] = ping_fails.get(dev_id, 0) + 1
-                        if ping_fails.get(dev_id, 0) == 5:
-                            logger.debug("[Ping] Device %d at %s: 5 consecutive failures", dev_id, address)
+                        fails = ping_fails.get(dev_id, 0) + 1
+                        ping_fails[dev_id] = fails
+                        err = name_result or "No response"
+                        self._on_device_poll_fail(dev_id, str(err))
+                        if fails % 5 == 0:
+                            logger.debug("[Ping] Device %d at %s: %d consecutive failures", dev_id, address, fails)
 
                     await asyncio.sleep(STAGGER_S)
 
