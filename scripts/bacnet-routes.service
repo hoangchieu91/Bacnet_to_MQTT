@@ -1,0 +1,13 @@
+[Unit]
+Description=BACnet Policy Routing (bypass Tailscale for 192.168.20.0/24 via ens38)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/bacnet-routes.sh
+RemainAfterExit=yes
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
