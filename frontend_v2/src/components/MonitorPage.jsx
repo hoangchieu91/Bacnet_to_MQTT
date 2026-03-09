@@ -132,9 +132,13 @@ export function MonitorPage() {
     const mid = m.id;
     setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: true, result: null } }));
     try {
+      // For binary types keep 'active'/'inactive' as string; for others parse to number
+      const ot = (m.object_type || '').toLowerCase();
+      const isBin = ot.includes('binary');
+      const sendVal = isBin ? value : parseFloat(value);
       const res = await fetch(`${API}/bacnet/write`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_id: m.device_id, object_type: m.object_type, object_instance: m.object_instance, value: parseFloat(value), priority: parseInt(priority) })
+        body: JSON.stringify({ device_id: m.device_id, object_type: m.object_type, object_instance: m.object_instance, value: sendVal, priority: parseInt(priority) })
       });
       const d = await res.json();
       const ok = d.success !== false;
