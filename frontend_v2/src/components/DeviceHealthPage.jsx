@@ -61,6 +61,9 @@ function DeviceTile({ device, onClick }) {
       <div className="text-[10px] text-text-muted">{device.address || '—'}</div>
       <div className="flex items-center gap-2 mt-0.5">
         <span className="text-[10px] text-text-muted">{device.point_count || 0} pts</span>
+        {device.bms_queried && (
+          <span className="text-[9px] font-bold px-1 rounded bg-violet-500/20 text-violet-400 border border-violet-500/30">BMS</span>
+        )}
         {device.online === false && device.fail_count > 0 && <span className="text-[10px] text-error">✕{device.fail_count}</span>}
         {device.last_seen && <span className="text-[10px] text-text-muted ml-auto">{timeSince(device.last_seen)}</span>}
       </div>
@@ -106,6 +109,7 @@ function NetworkCard({ networkName, devices, color, defaultOpen, onTileClick }) 
   const online  = devices.filter(d => d.online === true).length;
   const offline = devices.filter(d => d.online === false).length;
   const pending = devices.filter(d => d.online === null || d.online === undefined).length;
+  const bmsDevs = devices.filter(d => d.bms_queried).length;
   const pct = devices.length > 0 ? (online / devices.length) * 100 : 0;
 
   return (
@@ -136,6 +140,7 @@ function NetworkCard({ networkName, devices, color, defaultOpen, onTileClick }) 
           {online  > 0 && <span className="text-success font-semibold">● {online} online</span>}
           {offline > 0 && <span className="text-error   font-semibold">● {offline} off</span>}
           {pending > 0 && <span className="text-warning/70 text-[11px]">⏳ {pending}</span>}
+          {bmsDevs > 0 && <span className="text-violet-400 text-[11px] font-medium">👁 {bmsDevs} BMS</span>}
           {/* % badge */}
           <span className="hidden sm:block px-1.5 py-0.5 rounded-md text-[10px] font-mono"
             style={{ background: `${color}22`, color }}>

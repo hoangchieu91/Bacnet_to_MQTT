@@ -455,6 +455,7 @@ export function SettingsPage() {
             <Field label="IP Override" value={bacnet.ip} onChange={v => setBacnet(p => ({ ...p, ip: v }))} placeholder="Auto-detect" />
             <Field label="Port" value={bacnet.port} onChange={v => setBacnet(p => ({ ...p, port: Number(v) }))} type="number" placeholder="47808" />
             <Field label="Device ID" value={bacnet.device_id} onChange={v => setBacnet(p => ({ ...p, device_id: Number(v) }))} type="number" placeholder="599" />
+            <Field label="BMS Server IP" value={bacnet.bms_server_ip || ''} onChange={v => setBacnet(p => ({ ...p, bms_server_ip: v }))} placeholder="e.g. 192.168.20.10 (passive WHO-IS monitor)" />
           </div>
           <button onClick={saveBacnet} disabled={saving}
             className="flex items-center gap-2 px-4 py-2 mt-4 bg-gradient-to-r from-accent-primary to-purple-600 rounded-lg text-white text-sm font-medium disabled:opacity-50">
