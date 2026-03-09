@@ -393,14 +393,31 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
   }, [preset, customFrom, customTo]);
 
   const buildData = useCallback((seriesMap) => {
+    // Collect all unique timestamps, sorted ascending
     const tsSet = new Set();
     Object.values(seriesMap).forEach(pts => pts.forEach(p => tsSet.add(p.timestamp)));
     const sorted = [...tsSet].sort();
+
+    // Build lookup: mid -> sorted array of {ts, value}
+    const byMid = {};
+    Object.entries(seriesMap).forEach(([mid, pts]) => {
+      byMid[mid] = [...pts].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    });
+
+    // Forward-fill: for each timestamp, find the most recent value for each series
+    const lastKnown = {}; // mid -> last numeric value
     return sorted.map(ts => {
       const row = { timestamp: ts };
-      Object.entries(seriesMap).forEach(([mid, pts]) => {
-        const pt = pts.find(p => p.timestamp === ts);
-        row[mid] = pt ? Number(pt.value) : null;
+      Object.keys(byMid).forEach(mid => {
+        const pts = byMid[mid];
+        // Find exact or most recent point <= ts
+        const exact = pts.find(p => p.timestamp === ts);
+        if (exact !== undefined) {
+          const v = Number(exact.value);
+          lastKnown[mid] = isNaN(v) ? lastKnown[mid] : v;
+        }
+        // Use forward-filled value if available, else null
+        row[mid] = lastKnown[mid] !== undefined ? lastKnown[mid] : null;
       });
       return row;
     });
@@ -547,6 +564,10 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
                       travellerWidth={5}
                     />
                     {visiblePoints.map((pt) => {
+                      // Use stepAfter for binary-type points (on/off signals)
+                      const mapping = mappings.find(m => m.id === pt.mapping_id);
+                      const isBinary = mapping && (mapping.object_type || '').toLowerCase().includes('binary');
+                      const lineType = isBinary ? 'stepAfter' : 'monotone';
                       const props = {
                         key: pt.id,
                         dataKey: pt.mapping_id,
@@ -554,16 +575,22 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
                         yAxisId: pt.yAxis || 'left',
                         stroke: pt.color,
                         fill: pt.color,
-                        strokeWidth: 1.5,
+                        strokeWidth: 2,
+                        connectNulls: true,
+                        type: lineType,
+                        dot: false,
+                        activeDot: { r: 3 },
                       };
                       if (pt.type === 'area') return (
-                        <Area {...props} type="monotone" fillOpacity={0.12} dot={false} activeDot={{ r: 3 }} connectNulls={false} />
+                        <Area {...props} fillOpacity={0.12} />
                       );
                       if (pt.type === 'bar') return (
-                        <Bar {...props} opacity={0.8} radius={[2, 2, 0, 0]} />
+                        <Bar key={pt.id} dataKey={pt.mapping_id} name={pt.mapping_id}
+                          yAxisId={pt.yAxis || 'left'} stroke={pt.color} fill={pt.color}
+                          opacity={0.8} radius={[2, 2, 0, 0]} />
                       );
                       return (
-                        <Line {...props} type="monotone" dot={false} activeDot={{ r: 3 }} connectNulls={false} />
+                        <Line {...props} />
                       );
                     })}
                   </ComposedChart>
