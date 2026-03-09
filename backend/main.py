@@ -601,6 +601,76 @@ async def get_events(
     return {"events": events}
 
 
+@app.get("/api/devices/{device_id}/offline-history")
+async def get_device_offline_history(device_id: int, limit: int = 200):
+    """Return paired offline↔online incidents for a device.
+    Each incident: { offline_at, online_at, duration_s, duration_text }
+    """
+    if not history_store or history_store._conn is None:
+        return {"incidents": [], "offline_count": 0}
+
+    rows = history_store._conn.execute(
+        """SELECT event_type, timestamp FROM event_log
+           WHERE device_id = ? AND event_type IN ('device_offline','device_online')
+           ORDER BY timestamp ASC
+           LIMIT ?""",
+        (device_id, limit * 2),
+    ).fetchall()
+
+    incidents = []
+    i = 0
+    while i < len(rows):
+        etype, ts = rows[i]
+        if etype == "device_offline":
+            offline_at = ts
+            online_at = None
+            # Look for the next device_online
+            j = i + 1
+            while j < len(rows):
+                if rows[j][0] == "device_online":
+                    online_at = rows[j][1]
+                    i = j  # skip forward
+                    break
+                j += 1
+
+            # Compute duration
+            duration_s = None
+            duration_text = "Still offline"
+            if online_at:
+                try:
+                    from datetime import datetime, timezone
+                    def parse_ts(s):
+                        # Handle both UTC offset and Z suffix
+                        s = s.replace("Z", "+00:00")
+                        return datetime.fromisoformat(s)
+                    dt_off = parse_ts(offline_at)
+                    dt_on = parse_ts(online_at)
+                    duration_s = int((dt_on - dt_off).total_seconds())
+                    if duration_s < 60:
+                        duration_text = f"{duration_s}s"
+                    elif duration_s < 3600:
+                        duration_text = f"{duration_s // 60}m {duration_s % 60}s"
+                    else:
+                        h = duration_s // 3600
+                        m = (duration_s % 3600) // 60
+                        duration_text = f"{h}h {m}m"
+                except Exception:
+                    pass
+
+            incidents.append({
+                "offline_at": offline_at,
+                "online_at": online_at,
+                "duration_s": duration_s,
+                "duration_text": duration_text,
+            })
+        i += 1
+
+    # Return most recent first
+    incidents.reverse()
+    return {"incidents": incidents[:limit], "offline_count": len(incidents)}
+
+
+
 @app.get("/api/bacnet/devices/{device_id}/objects")
 async def list_objects(device_id: int, refresh: bool = False):
     """
