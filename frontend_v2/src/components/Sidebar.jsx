@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { LayoutDashboard, Cable, Activity, Replace, Users, TrendingUp, FileText, Clock, Settings, Eye, AlertTriangle, LogOut, Download, ChevronLeft, ChevronRight, PanelLeft } from 'lucide-react';
+import { LayoutDashboard, Cable, Activity, Replace, Users, TrendingUp, FileText, Clock, Settings, Eye, AlertTriangle, LogOut, Download, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuth } from '../App';
 
 const SidebarItem = ({ icon: Icon, label, active = false, onClick, badge, collapsed }) => (
@@ -14,7 +14,6 @@ const SidebarItem = ({ icon: Icon, label, active = false, onClick, badge, collap
     <Icon size={18} className="flex-shrink-0" />
     {!collapsed && <span className="text-sm font-medium flex-1 truncate">{label}</span>}
     {!collapsed && badge && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-error/20 text-error">{badge}</span>}
-    {/* Tooltip khi collapsed */}
     {collapsed && (
       <div className="absolute left-full ml-2 px-2 py-1 bg-bg-secondary border border-border rounded-md text-xs text-white whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 shadow-lg">
         {label}
@@ -39,8 +38,9 @@ export function Sidebar({ activePage = 'dashboard', onNavigate, collapsed = fals
   const mqttOk = status?.mqtt_connected;
 
   return (
+    // hidden on mobile, flex on md+
     <aside
-      className="bg-bg-secondary border-r border-border flex flex-col fixed top-0 left-0 bottom-0 z-50 backdrop-blur-xl transition-all duration-300"
+      className="hidden md:flex bg-bg-secondary border-r border-border flex-col fixed top-0 left-0 bottom-0 z-50 backdrop-blur-xl transition-all duration-300"
       style={{ width: collapsed ? '64px' : '220px' }}
     >
       {/* Header */}
