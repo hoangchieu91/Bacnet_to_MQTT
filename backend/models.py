@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, Optional
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -132,9 +133,26 @@ class WebConfig(BaseModel):
 
 
 class GroupConfig(BaseModel):
-    id: str
+    id: str = Field(default_factory=lambda: str(uuid4()))
     name: str = ""
     description: str = ""
+
+
+class WebhookConfig(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    name: str = ""                                   # Human label (e.g. "Teams Alert")
+    url: str = ""                                    # HTTP POST URL
+    enabled: bool = True
+    severity_filter: list[str] = Field(default_factory=lambda: ["warning", "critical"])
+    secret_header: str = ""                          # Optional X-Webhook-Secret header value
+
+
+class UserConfig(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    username: str
+    hashed_password: str = ""
+    role: str = "viewer"  # admin | operator | viewer
+    enabled: bool = True
 
 
 class GatewayConfig(BaseModel):
@@ -145,6 +163,8 @@ class GatewayConfig(BaseModel):
     groups: list[GroupConfig] = Field(default_factory=list)
     schedules: list["ScheduleEntry"] = Field(default_factory=list)
     anomaly_rules: list[dict] = Field(default_factory=list)
+    webhooks: list[WebhookConfig] = Field(default_factory=list)
+    users: list[UserConfig] = Field(default_factory=list)  # Empty = auth disabled
 
 
 class ScheduleEntry(BaseModel):

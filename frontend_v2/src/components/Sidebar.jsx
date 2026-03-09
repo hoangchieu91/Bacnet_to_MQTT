@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Activity, Map, Users, Eye, BarChart2,
-  FileText, Clock, Settings, Zap, Wifi, WifiOff,
+  FileText, Clock, Settings, Zap, Wifi,
   ChevronRight, AlertTriangle,
 } from 'lucide-react';
 

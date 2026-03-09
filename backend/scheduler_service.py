@@ -25,6 +25,7 @@ class SchedulerService:
         self._task: asyncio.Task | None = None
         self._executed_today: set[str] = set()  # Track which schedules ran today
         self._last_date: str = ""
+        self._last_run: dict[str, dict] = {}   # { schedule_id: {time, success, message} }
 
     def start(self):
         if self._task is None:
@@ -36,6 +37,19 @@ class SchedulerService:
             self._task.cancel()
             self._task = None
             logger.info("Scheduler service stopped.")
+
+    def get_last_run_status(self) -> dict:
+        """Return dict of { schedule_id: {time, success, message} }."""
+        return dict(self._last_run)
+
+    async def run_now(self, schedule_id: str) -> dict:
+        """Manually trigger a schedule immediately (ignores day/time filter)."""
+        schedules = getattr(self._cm.config, 'schedules', [])
+        sched = next((s for s in schedules if s.id == schedule_id), None)
+        if not sched:
+            return {"success": False, "message": "Schedule not found"}
+        await self._execute_schedule(sched)
+        return self._last_run.get(schedule_id, {"success": False, "message": "Unknown"})
 
     async def _loop(self):
         """Main scheduler loop — checks every 30 seconds."""
@@ -91,13 +105,16 @@ class SchedulerService:
 
     async def _execute_schedule(self, sched):
         """Write a value to a BACnet object according to the schedule."""
+        run_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         try:
             address = self._bacnet.get_device_address(sched.device_id)
             if not address:
-                logger.warning("Schedule '%s': device %d not found", sched.name, sched.device_id)
+                msg = f"Device {sched.device_id} not found"
+                logger.warning("Schedule '%s': %s", sched.name, msg)
+                self._last_run[sched.id] = {"time": run_time, "success": False, "message": msg}
                 if self._history:
                     self._history.log_event(
-                        "schedule", f"Schedule '{sched.name}' failed: device {sched.device_id} not found",
+                        "schedule", f"Schedule '{sched.name}' failed: {msg}",
                         device_id=sched.device_id, severity="warning",
                     )
                 return
@@ -107,20 +124,21 @@ class SchedulerService:
                 sched.value, sched.priority,
             )
 
-            logger.info(
-                "Schedule '%s' executed: wrote %s to %s:%d @ priority %d",
-                sched.name, sched.value, sched.object_type, sched.object_instance, sched.priority,
-            )
+            msg = f"Wrote {sched.value} to {sched.object_type}:{sched.object_instance} @ P{sched.priority}"
+            self._last_run[sched.id] = {"time": run_time, "success": True, "message": msg}
+            logger.info("Schedule '%s' executed: %s", sched.name, msg)
 
             if self._history:
                 self._history.log_event(
                     "schedule",
-                    f"Schedule '{sched.name}': wrote {sched.value} to {sched.object_type}:{sched.object_instance} on device {sched.device_id}",
+                    f"Schedule '{sched.name}': {msg} on device {sched.device_id}",
                     device_id=sched.device_id, severity="info",
                     data={"schedule_id": sched.id, "value": str(sched.value), "priority": sched.priority},
                 )
 
         except Exception as e:
+            msg = str(e)
+            self._last_run[sched.id] = {"time": run_time, "success": False, "message": msg}
             logger.error("Schedule '%s' error: %s", sched.name, e)
             if self._history:
                 self._history.log_event(

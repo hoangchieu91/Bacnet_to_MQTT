@@ -348,8 +348,19 @@ export function MappingsPage() {
   const onCellValueChanged = useCallback(async (e) => {
     const { data, colDef } = e;
     if (!colDef.field || !data?.id) return;
-    try { await useMappingStore.getState().updateMapping(data.id, { [colDef.field]: e.newValue }); }
-    catch (err) { console.error('Inline edit error:', err); }
+    try {
+      // Optimistic update: patch the row in-place so ag-grid re-renders immediately
+      // without re-fetching all 100+ mappings from the server
+      await fetch(`${API}/mappings/${data.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [colDef.field]: e.newValue }),
+      });
+      // Update the store mapping in-place (no full re-fetch)
+      useMappingStore.setState(state => ({
+        mappings: state.mappings.map(m => m.id === data.id ? { ...m, [colDef.field]: e.newValue } : m)
+      }));
+    } catch (err) { console.error('Inline edit error:', err); }
   }, []);
 
   const onRowClicked = useCallback((e) => {
@@ -389,20 +400,28 @@ export function MappingsPage() {
   }, [importMappings]);
 
   const handleDeleteSelected = useCallback(async () => {
-    if (selectedIds.size === 0) return;
-    if (!confirm(`Delete ${selectedIds.size} mapping(s)?`)) return;
-    for (const id of selectedIds) {
-      try { await deleteMapping(id); } catch (e) { console.error(e); }
+    // Read directly from ag-grid to avoid stale closure on selectedIds
+    const selectedRows = gridRef.current?.api?.getSelectedRows() || [];
+    if (selectedRows.length === 0) { showToast('⚠️ No rows selected'); return; }
+    if (!confirm(`Delete ${selectedRows.length} mapping(s)?`)) return;
+    let deleted = 0;
+    for (const row of selectedRows) {
+      try {
+        await fetch(`${API}/mappings/${row.id}`, { method: 'DELETE' });
+        deleted++;
+      } catch (e) { console.error('Delete failed for', row.id, e); }
     }
-    clearSelection(); showToast(`🗑 Deleted ${selectedIds.size} points`);
-  }, [selectedIds, deleteMapping, clearSelection]);
+    clearSelection();
+    await fetchMappings();
+    showToast(`🗑 Deleted ${deleted} point${deleted !== 1 ? 's' : ''}`);
+  }, [clearSelection, fetchMappings]);
 
   const selectedMapping = mappings.find(m => m.id === selectedId);
   const selectedMappings = mappings.filter(m => selectedIds.has(m.id));
   const selCount = selectedIds.size;
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-screen w-full overflow-hidden">
       {/* Toast */}
       {toast && (
         <div className="fixed top-4 right-4 z-[100] px-4 py-2 bg-success/10 border border-success/30 text-success rounded-lg text-sm font-medium shadow-lg">
@@ -476,7 +495,6 @@ export function MappingsPage() {
             onSelectionChanged={onSelectionChanged}
             animateRows={true} getRowId={p => p.data.id}
             theme={darkGridTheme} rowHeight={44} headerHeight={40}
-            loading={loading}
             overlayNoRowsTemplate='<div style="padding:40px;color:#5a5a75;">No mappings yet. Click <b>+ Add Point</b> to start.</div>'
           />
         </div>

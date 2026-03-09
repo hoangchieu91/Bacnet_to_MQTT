@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from backend.bacnet_service import BacnetService
@@ -33,12 +35,14 @@ class GatewayEngine:
         mqtt: MqttService,
         ws_manager: WebSocketManager,
         history_store=None,
+        webhook_service=None,
     ):
         self._cm = config_manager
         self._bacnet = bacnet
         self._mqtt = mqtt
         self._ws = ws_manager
         self._history = history_store
+        self._webhook = webhook_service  # Optional WebhookService
         self._anomaly: "AnomalyEngine | None" = None  # Set by main.py after init
 
         self._status = GatewayStatus.STOPPED
@@ -52,6 +56,13 @@ class GatewayEngine:
 
         # Device status tracking: { device_id: { online, fail_count, last_seen, last_fail } }
         self._device_status: dict[int, dict] = {}
+
+        # Pinging: known devices loaded from persistence (survive restart)
+        # { device_id: {address, name} }
+        self._known_devices: dict[int, dict] = {}
+        self._ping_task: asyncio.Task[None] | None = None
+        self._devices_file = Path(__file__).resolve().parent.parent / "config" / "discovered_devices.json"
+        self._load_known_devices()
 
         # BACnet read serializer — prevents concurrent reads saturating BAC0 queue
         # Critical for MSTP networks where only one request can be in-flight
@@ -84,17 +95,19 @@ class GatewayEngine:
         self._mqtt.subscribe(f"{prefix}/cmd/#", callback=self._handle_mqtt_command)
 
         self._polling_task = asyncio.create_task(self._polling_loop())
+        self._ping_task = asyncio.create_task(self._device_ping_loop())
         logger.info("Gateway engine started. Listening on %s/cmd/#", prefix)
 
     async def stop(self) -> None:
         """Stop the polling loop."""
         self._running = False
-        if self._polling_task and not self._polling_task.done():
-            self._polling_task.cancel()
-            try:
-                await self._polling_task
-            except asyncio.CancelledError:
-                pass
+        for task in [self._polling_task, self._ping_task]:
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         self._status = GatewayStatus.STOPPED
         self._start_time = None
         self._loop = None
@@ -302,6 +315,21 @@ class GatewayEngine:
                         "value": value,
                         "timestamp": now_str,
                     })
+                    # Fire webhook (non-blocking)
+                    if self._webhook:
+                        msg = f"{mapping.label or mapping.id}: {alarm_state}"
+                        asyncio.create_task(self._webhook.fire(
+                            event_type="alarm_triggered",
+                            severity=severity,
+                            mapping_id=mapping.id,
+                            label=mapping.label or mapping.id,
+                            device_id=mapping.device_id,
+                            object_type=mapping.object_type,
+                            object_instance=mapping.object_instance,
+                            value=value,
+                            alarm_state=alarm_state,
+                            message=msg,
+                        ))
             elif alarm_state == "normal":
                 # Clear alarm if it was set
                 alarm_key = f"alarm:{mapping.id}"
@@ -360,6 +388,20 @@ class GatewayEngine:
                                 "timestamp": now_str,
                                 "source": "threshold",
                             })
+                            # Fire webhook (non-blocking)
+                            if self._webhook:
+                                asyncio.create_task(self._webhook.fire(
+                                    event_type="threshold_breach",
+                                    severity=sev,
+                                    mapping_id=mapping.id,
+                                    label=mapping.label or mapping.id,
+                                    device_id=mapping.device_id,
+                                    object_type=mapping.object_type,
+                                    object_instance=mapping.object_instance,
+                                    value=fval,
+                                    alarm_state=new_thresh,
+                                    message=msg,
+                                ))
                         else:
                             # Alarm cleared
                             if self._history:
@@ -499,6 +541,167 @@ class GatewayEngine:
     def get_device_status(self) -> dict[int, dict]:
         """Return current device status dict."""
         return dict(self._device_status)
+
+    # ── Known device registry (persist across restarts) ──
+    def _load_known_devices(self) -> None:
+        """Load persisted discovered devices from JSON file."""
+        try:
+            if self._devices_file.exists():
+                with open(self._devices_file, "r") as f:
+                    data = json.load(f)
+                self._known_devices = {int(k): v for k, v in data.items()}
+                logger.info("Loaded %d known devices from %s", len(self._known_devices), self._devices_file)
+        except Exception as e:
+            logger.warning("Could not load known devices: %s", e)
+            self._known_devices = {}
+
+    def _save_known_devices(self) -> None:
+        """Persist known devices to JSON file."""
+        try:
+            self._devices_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._devices_file, "w") as f:
+                json.dump({str(k): v for k, v in self._known_devices.items()}, f, indent=2)
+        except Exception as e:
+            logger.warning("Could not save known devices: %s", e)
+
+    def register_discovered_devices(self, devices: list) -> None:
+        """Called after discovery to register all discovered devices so they are tracked and persisted."""
+        changed = False
+        for dev in devices:
+            dev_id = dev.device_id
+            existing = self._known_devices.get(dev_id)
+            new_entry = {
+                "device_id": dev_id,
+                "name": dev.device_name or f"Device {dev_id}",
+                "address": dev.address or "",
+            }
+            if existing != new_entry:
+                self._known_devices[dev_id] = new_entry
+                changed = True
+        if changed:
+            self._save_known_devices()
+            logger.info("Registered %d known devices (total: %d)", len(devices), len(self._known_devices))
+
+    def get_known_devices(self) -> dict[int, dict]:
+        """Return all known devices (survived restarts)."""
+        return dict(self._known_devices)
+
+    # ── Background device ping loop ──────────────
+    async def _device_ping_loop(self) -> None:
+        """
+        Periodically 'ping' all known devices by reading objectName.
+        - Syncs from BAC0 cache every SYNC_INTERVAL_S to pick up new devices
+        - Saves real device name when objectName read succeeds
+        - Updates online/offline WITHOUT requiring mappings
+        """
+        PING_INTERVAL_S = 180
+        PING_FAIL_THRESHOLD = 3
+        STAGGER_S = 2.0
+        SYNC_INTERVAL_S = 30    # sync from BAC0 cache every 30s
+
+        last_pinged: dict[int, float] = {}
+        ping_fails: dict[int, int] = {}
+        last_sync = 0.0
+
+        logger.info("[Ping] Device ping loop started (%d known devices)", len(self._known_devices))
+
+        while self._running:
+            try:
+                if not self._bacnet.connected:
+                    await asyncio.sleep(10)
+                    continue
+
+                now = time.monotonic()
+
+                # ── Periodically sync from BAC0 full device cache ────────────
+                # BAC0 accumulates I-Am responses continuously; this picks up
+                # devices discovered after our initial API scan
+                if now - last_sync >= SYNC_INTERVAL_S:
+                    last_sync = now
+                    changed = False
+                    for dev in self._bacnet.discovered_devices:
+                        did = dev.device_id
+                        if did not in self._known_devices:
+                            self._known_devices[did] = {
+                                "device_id": did,
+                                "name": dev.device_name or f"Device {did}",
+                                "address": dev.address or "",
+                            }
+                            changed = True
+                        else:
+                            entry = self._known_devices[did]
+                            if not entry.get("address") and dev.address:
+                                entry["address"] = dev.address
+                                changed = True
+                            # Accept real name from BAC0 cache if available
+                            cached = dev.device_name
+                            if cached and cached != f"Device {did}":
+                                cur = entry.get("name", "")
+                                if not cur or cur == f"Device {did}":
+                                    entry["name"] = cached
+                                    changed = True
+                    if changed:
+                        self._save_known_devices()
+                        logger.info("[Ping] Synced; total known: %d", len(self._known_devices))
+
+                # ── Ping devices that are due ────────────────────────────────
+                for dev_id, dev_info in list(self._known_devices.items()):
+                    elapsed = now - last_pinged.get(dev_id, 0)
+                    if elapsed < PING_INTERVAL_S:
+                        continue
+
+                    address = dev_info.get("address", "")
+                    if not address:
+                        bdev = self._bacnet.get_device(dev_id)
+                        if bdev:
+                            address = bdev.address
+                            dev_info["address"] = address
+                    if not address:
+                        continue
+
+                    last_pinged[dev_id] = now
+
+                    # Read objectName — ping + name resolution in one
+                    name_result = None
+                    try:
+                        name_result = await self._bacnet.read_object(
+                            address, "device", dev_id, "objectName"
+                        )
+                        success = name_result is not None
+                    except Exception:
+                        success = False
+
+                    if success:
+                        ping_fails[dev_id] = 0
+                        # Update real name if we got one
+                        if name_result:
+                            name_str = str(name_result).strip()
+                            cur = dev_info.get("name", "")
+                            if name_str and name_str != f"Device {dev_id}" and (not cur or cur == f"Device {dev_id}"):
+                                dev_info["name"] = name_str
+                                self._save_known_devices()
+                        # Mark ONLINE — always update on success
+                        self._on_device_poll_success(dev_id, address)
+                    else:
+                        # DO NOT mark offline from ping — failure could be MSTP route not cached,
+                        # temporary timeout, etc. Only the poll loop marks devices offline.
+                        # If device has never been polled (no mappings), leave status as None (pending).
+                        ping_fails[dev_id] = ping_fails.get(dev_id, 0) + 1
+                        # Log repeated failures for debugging only
+                        if ping_fails.get(dev_id, 0) == 5:
+                            logger.debug("[Ping] Device %d at %s: 5 consecutive ping failures", dev_id, address)
+
+                    await asyncio.sleep(STAGGER_S)
+
+                await asyncio.sleep(1)
+
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.error("[Ping] Loop error: %s", exc)
+                await asyncio.sleep(10)
+
+        logger.info("[Ping] Device ping loop stopped")
 
     # ═══════════════════════════════════════════
     # MQTT Command Handler

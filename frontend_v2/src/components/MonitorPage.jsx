@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { RefreshCw, Loader2, Eye, Unlock, TrendingUp, Activity, AlertTriangle, ArrowUpDown, BarChart2 } from 'lucide-react';
+// WriteControl state: { [mapping_id]: { priority: '8', value: '', loading: false, result: null } }
+import { RefreshCw, Loader2, Eye, Unlock, TrendingUp, Activity, AlertTriangle, ArrowUpDown, BarChart2, Pencil, Send, Minus } from 'lucide-react';
 
 const API = '/api';
 
@@ -46,17 +47,23 @@ export function MonitorPage() {
   const [groupFilter, setGroupFilter] = useState('ALL');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [expandedPA, setExpandedPA] = useState(null);
+  const [writeCtrl, setWriteCtrl] = useState({}); // { [mapping_id]: { priority, value, loading, result } }
   const [tab, setTab] = useState('values'); // 'values' | 'priority'
   const [loadingAll, setLoadingAll] = useState(false);
   const intervalRef = useRef(null);
   const paIntervalRef = useRef(null);
 
+  const [initLoading, setInitLoading] = useState(true);
+
   const fetchMappings = useCallback(async () => {
     try {
       const res = await fetch(`${API}/mappings`);
       const data = await res.json();
-      setMappings(data.mappings || []);
+      const list = data.mappings || [];
+      // Only update if we got real data (guard against transient empty response)
+      setMappings(prev => list.length > 0 ? list : prev);
     } catch (e) { console.error(e); }
+    finally { setInitLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -70,6 +77,14 @@ export function MonitorPage() {
     }
     return () => clearInterval(intervalRef.current);
   }, [autoRefresh, fetchMappings]);
+
+  // Auto-load PA when user switches to Priority Array tab & no data loaded yet
+  useEffect(() => {
+    if (tab === 'priority' && mappings.length > 0 && Object.keys(paData).length === 0) {
+      loadAllPA();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, mappings.length]);
 
   const loadAllPA = useCallback(async (targetMappings) => {
     const targets = targetMappings || mappings;
@@ -111,6 +126,38 @@ export function MonitorPage() {
       });
       setTimeout(() => loadSinglePA(m), 600);
     } catch (e) { console.error(e); }
+  };
+
+  const writeValue = async (m, priority, value) => {
+    const mid = m.id;
+    setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: true, result: null } }));
+    try {
+      const res = await fetch(`${API}/bacnet/write`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: m.device_id, object_type: m.object_type, object_instance: m.object_instance, value: parseFloat(value), priority: parseInt(priority) })
+      });
+      const d = await res.json();
+      const ok = d.success !== false;
+      setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: false, result: ok ? '✅ Wrote' : `❌ ${d.error || 'Failed'}` } }));
+      if (ok) setTimeout(() => loadSinglePA(m), 600);
+    } catch (e) {
+      setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: false, result: `❌ ${e.message}` } }));
+    }
+  };
+
+  const relinquishOne = async (m, priority) => {
+    const mid = m.id;
+    setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: true, result: null } }));
+    try {
+      await fetch(`${API}/bacnet/release`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_id: m.device_id, object_type: m.object_type, object_instance: m.object_instance, priority })
+      });
+      setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: false, result: `✅ Released P${priority}` } }));
+      setTimeout(() => loadSinglePA(m), 600);
+    } catch (e) {
+      setWriteCtrl(p => ({ ...p, [mid]: { ...p[mid], loading: false, result: `❌ ${e.message}` } }));
+    }
   };
 
   const groups = useMemo(() => [...new Set(mappings.flatMap(m => (m.group || '').split(',').map(s => s.trim()).filter(Boolean)))], [mappings]);
@@ -218,12 +265,21 @@ export function MonitorPage() {
         <span className="ml-auto text-[10px] text-text-muted">{filtered.length} showing</span>
       </div>
 
-      {/* No mappings */}
+      {/* Loading / No mappings */}
       {mappings.length === 0 && (
         <div className="glass-card p-10 text-center">
-          <Activity size={36} className="mx-auto text-text-muted mb-3 opacity-40" />
-          <p className="text-text-secondary text-sm mb-1">No points configured</p>
-          <p className="text-text-muted text-xs">Go to Devices → select points → Add to mappings first</p>
+          {initLoading ? (
+            <>
+              <Loader2 size={36} className="mx-auto text-accent-primary mb-3 animate-spin" />
+              <p className="text-text-secondary text-sm">Đang tải danh sách points...</p>
+            </>
+          ) : (
+            <>
+              <Activity size={36} className="mx-auto text-text-muted mb-3 opacity-40" />
+              <p className="text-text-secondary text-sm mb-1">No points configured</p>
+              <p className="text-text-muted text-xs">Go to Devices → select points → Add to mappings first</p>
+            </>
+          )}
         </div>
       )}
 
@@ -243,17 +299,20 @@ export function MonitorPage() {
                   <th className="px-3 py-2.5 text-left font-bold text-text-muted">Type</th>
                   <th className="px-3 py-2.5 text-left font-bold text-text-muted">Label</th>
                   <th className="px-3 py-2.5 text-left font-bold text-text-muted">Device · Inst</th>
-                  <th className="px-3 py-2.5 text-right font-bold text-text-muted">Value</th>
+                  <th className="px-3 py-2.5 text-right font-bold text-text-muted">Value / Priority</th>
                   <th className="px-3 py-2.5 text-right font-bold text-text-muted">Updated</th>
                   <th className="px-3 py-2.5 text-center font-bold text-text-muted">Poll</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(m => {
-                  const fv = formatValue(m);
+                               const fv = formatValue(m);
                   const age = getAge(m.last_updated);
                   const ot = TYPE_SHORT[m.object_type] || m.object_type?.slice(0,2)?.toUpperCase() || '?';
                   const isStale = m.last_updated && (Date.now() - new Date(m.last_updated).getTime()) > 60000;
+                  // Derive active priority from PA data (lowest slot with a non-null value)
+                  const mPa = paData[m.id];
+                  const activePriority = mPa ? Object.entries(mPa.pa || {}).filter(([, v]) => v != null && v !== 'null' && v !== 'Null').map(([k]) => parseInt(k)).sort((a,b) => a-b)[0] : null;
                   return (
                     <tr key={m.id} className="border-b border-border/30 hover:bg-white/[0.02] transition-colors">
                       <td className="px-3 py-2.5">
@@ -262,11 +321,18 @@ export function MonitorPage() {
                       <td className="px-3 py-2.5 text-text-primary font-medium max-w-[220px] truncate">{m.label || `${m.object_type}:${m.object_instance}`}</td>
                       <td className="px-3 py-2.5 text-text-muted font-mono">{m.device_id} · {m.object_instance}</td>
                       <td className="px-3 py-2.5 text-right">
-                        {fv ? (
-                          <span className={`font-bold ${fv.cls}`}>{fv.text}{fv.unit ? <span className="text-text-muted ml-1 font-normal text-[10px]">{fv.unit}</span> : null}</span>
-                        ) : (
-                          <span className="text-text-muted italic">waiting…</span>
-                        )}
+                        <div className="flex items-center justify-end gap-1.5">
+                          {fv ? (
+                            <span className={`font-bold ${fv.cls}`}>{fv.text}{fv.unit ? <span className="text-text-muted ml-1 font-normal text-[10px]">{fv.unit}</span> : null}</span>
+                          ) : (
+                            <span className="text-text-muted italic">waiting…</span>
+                          )}
+                          {activePriority != null && (
+                            <span className={`text-[9px] px-1.5 py-0 rounded font-bold border ${PA_COLOR(activePriority)} opacity-90`} title={`Active at Priority ${activePriority}`}>
+                              P{activePriority}
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-3 py-2.5 text-right">
                         {age ? <span className={`text-[10px] ${isStale ? 'text-warning' : 'text-text-muted'}`}>{age} ago</span> : <span className="text-text-muted text-[10px]">—</span>}
@@ -301,77 +367,158 @@ export function MonitorPage() {
             const isLoadingPA = loadingPA[m.id];
             const ot = TYPE_SHORT[m.object_type] || m.object_type?.slice(0,2)?.toUpperCase() || '?';
             const isExpanded = expandedPA === m.id;
+            const wc = writeCtrl[m.id] || { priority: '8', value: '', loading: false, result: null };
+
+            // PA grid: 2 rows of 8
+            const row1 = Array.from({length: 8}, (_, i) => i + 1);
+            const row2 = Array.from({length: 8}, (_, i) => i + 9);
+            const paGrid = (row) => (
+              <div className="flex items-center gap-1">
+                {row.map(p => {
+                  const val = paArr[String(p)];
+                  const active = val != null && val !== 'null' && val !== 'Null';
+                  // Format value for display: binary → A/I, number → truncate
+                  const displayVal = active
+                    ? (String(val) === 'active' ? 'A' : String(val) === 'inactive' ? 'I' : String(val).length > 3 ? String(val).slice(0,3) : String(val))
+                    : null;
+                  return (
+                    <div key={p} title={`P${p} — ${PA_LABELS[p]}: ${active ? val : 'null'}`}
+                      className={`w-7 h-7 rounded flex flex-col items-center justify-center text-[8px] font-bold transition-all cursor-default gap-0
+                        ${active ? PA_COLOR(p) : 'bg-bg-input/50 text-text-muted/60 border border-border/30'}`}>
+                      <span className="text-[9px] leading-none">{p}</span>
+                      {active && <span className="leading-none opacity-90">{displayVal}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            );
 
             return (
               <div key={m.id} className="glass-card overflow-hidden">
                 {/* Row header */}
-                <div className="flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-white/[0.02]"
+                <div className="flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-white/[0.02]"
                   onClick={() => setExpandedPA(isExpanded ? null : m.id)}>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold shrink-0 ${TYPE_COLOR[ot] || 'bg-gray-500/15 text-gray-400'}`}>{ot}</span>
-                  <span className="text-sm font-medium text-white flex-1 truncate">{m.label || `${m.object_type}:${m.object_instance}`}</span>
-                  <span className="text-[10px] text-text-muted font-mono shrink-0">{m.device_id}:{m.object_instance}</span>
 
-                  {/* Present value */}
-                  <span className={`text-sm font-bold min-w-[60px] text-right ${pv != null ? 'text-white' : 'text-text-muted'}`}>
-                    {pv != null ? String(pv) : '—'}
-                  </span>
-
-                  {/* Mini PA grid: 16 priority slots */}
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    {Array.from({length: 16}, (_, i) => i + 1).map(p => {
-                      const val = paArr[String(p)];
-                      const active = val != null && val !== 'null' && val !== 'Null';
-                      return (
-                        <div key={p} title={`P${p} ${PA_LABELS[p]}: ${active ? val : 'null'}`}
-                          className={`w-3.5 h-3.5 rounded-sm flex items-center justify-center text-[6px] font-bold transition-all ${active ? PA_COLOR(p) : 'bg-bg-input/40 text-transparent'}`}>
-                          {p}
-                        </div>
-                      );
-                    })}
+                  {/* Left: type + label + value */}
+                  <div className="flex flex-col gap-0.5 min-w-[180px] shrink-0">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${TYPE_COLOR[ot] || 'bg-gray-500/15 text-gray-400'}`}>{ot}</span>
+                      <span className="text-sm font-medium text-white truncate max-w-[140px]">{m.label || `${m.object_type}:${m.object_instance}`}</span>
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-[10px] text-text-muted font-mono">{m.device_id}:{m.object_instance}</span>
+                      <span className={`text-base font-bold ${pv != null ? 'text-accent-primary' : 'text-text-muted'}`}>
+                        {pv != null ? String(pv) : '—'}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Active count badge */}
-                  {actives.length > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-warning/20 text-warning text-[10px] font-bold shrink-0">
-                      {actives.length} override{actives.length > 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {pa && actives.length === 0 && <span className="text-[10px] text-success shrink-0">Clean</span>}
+                  {/* Center: PA 2-row grid */}
+                  <div className="flex flex-col gap-1 flex-1" onClick={e => e.stopPropagation()}>
+                    {paGrid(row1)}
+                    {paGrid(row2)}
+                  </div>
 
-                  {/* Actions */}
-                  <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
-                    <button onClick={() => loadSinglePA(m)} disabled={isLoadingPA} className="p-1 rounded hover:bg-bg-card text-text-muted hover:text-white disabled:opacity-50" title="Read PA from BACnet">
-                      {isLoadingPA ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-                    </button>
-                    {actives.length > 0 && (
-                      <button onClick={() => relinquishAll(m)} className="p-1 rounded hover:bg-error/10 text-error" title="Relinquish All">
-                        <Unlock size={12} />
+                  {/* Right: status + actions */}
+                  <div className="flex flex-col items-end gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-1">
+                      {actives.length > 0 && (
+                        <span className="px-2 py-0.5 rounded-full bg-warning/20 text-warning text-[10px] font-bold">
+                          {actives.length} override{actives.length > 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {pa && actives.length === 0 && <span className="text-[10px] text-success">Clean</span>}
+                      <button onClick={() => loadSinglePA(m)} disabled={isLoadingPA}
+                        className="p-1 rounded hover:bg-bg-card text-text-muted hover:text-white disabled:opacity-50" title="Read PA">
+                        {isLoadingPA ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                       </button>
-                    )}
+                      {actives.length > 0 && (
+                        <button onClick={() => relinquishAll(m)}
+                          className="p-1 rounded hover:bg-error/10 text-error" title="Relinquish All">
+                          <Unlock size={12} />
+                        </button>
+                      )}
+                    </div>
+                    {/* Inline Write Control */}
+                    <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                      <select
+                        value={wc.priority}
+                        onChange={e => setWriteCtrl(p => ({ ...p, [m.id]: { ...wc, priority: e.target.value, result: null } }))}
+                        className="text-[10px] px-1.5 py-1 bg-bg-input border border-border rounded text-white focus:outline-none focus:border-accent-primary w-[70px]">
+                        {Array.from({length:16},(_,i)=>i+1).map(p => (
+                          <option key={p} value={String(p)}>P{p} {paArr[String(p)] != null && paArr[String(p)] !== 'null' ? '●' : ''}</option>
+                        ))}
+                      </select>
+                      {(() => {
+                        const ot = (m.object_type || '').toLowerCase();
+                        const isBin = ot.includes('binary');
+                        if (isBin) {
+                          return (
+                            <select
+                              value={wc.value}
+                              onChange={e => setWriteCtrl(p => ({ ...p, [m.id]: { ...wc, value: e.target.value, result: null } }))}
+                              className="text-[10px] px-1.5 py-1 bg-bg-input border border-border rounded text-white w-[90px] focus:outline-none focus:border-accent-primary"
+                            >
+                              <option value="">-- chọn --</option>
+                              <option value="active">✅ Active</option>
+                              <option value="inactive">⬛ Inactive</option>
+                            </select>
+                          );
+                        }
+                        return (
+                          <input
+                            type="number" step="any"
+                            placeholder="value"
+                            value={wc.value}
+                            onChange={e => setWriteCtrl(p => ({ ...p, [m.id]: { ...wc, value: e.target.value, result: null } }))}
+                            className="text-[10px] px-2 py-1 bg-bg-input border border-border rounded text-white w-16 focus:outline-none focus:border-accent-primary"
+                            onKeyDown={e => e.key === 'Enter' && wc.value && writeValue(m, wc.priority, wc.value)}
+                          />
+                        );
+                      })()}
+                      <button
+                        disabled={!wc.value || wc.loading}
+                        onClick={() => writeValue(m, wc.priority, wc.value)}
+                        title="Write value at this priority"
+                        className="flex items-center gap-1 px-2 py-1 bg-accent-primary/80 hover:bg-accent-primary rounded text-white text-[10px] font-bold disabled:opacity-40 transition-all">
+                        {wc.loading ? <Loader2 size={10} className="animate-spin" /> : <Send size={10} />}
+                        Write
+                      </button>
+                      <button
+                        disabled={wc.loading}
+                        onClick={() => relinquishOne(m, parseInt(wc.priority))}
+                        title={`Release P${wc.priority}`}
+                        className="flex items-center gap-1 px-2 py-1 bg-error/20 hover:bg-error/30 border border-error/30 rounded text-error text-[10px] font-bold disabled:opacity-40 transition-all">
+                        <Minus size={10} />
+                        Rel
+                      </button>
+                    </div>
+                    {wc.result && <span className="text-[10px] text-right">{wc.result}</span>}
                   </div>
                 </div>
 
-                {/* Expanded: full 16-level PA detail */}
+                {/* Expanded: full 16-level PA detail with color-coded cards */}
                 {isExpanded && pa && (
                   <div className="px-4 py-3 border-t border-border bg-bg-primary/40">
-                    <div className="text-[10px] text-text-muted mb-2 font-bold uppercase tracking-wider">Priority Array Detail (1 = highest)</div>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5">
+                    <div className="text-[10px] text-text-muted mb-2 font-bold uppercase tracking-wider">Priority Detail (1 = highest priority)</div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-1.5">
                       {Array.from({length: 16}, (_, i) => i + 1).map(p => {
                         const val = paArr[String(p)];
                         const active = val != null && val !== 'null' && val !== 'Null';
                         return (
-                          <div key={p} className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg ${active ? 'bg-warning/10 border border-warning/25' : 'bg-bg-input/30 border border-transparent'}`}>
-                            <span className={`text-[10px] font-bold w-5 h-5 rounded flex items-center justify-center shrink-0 ${active ? PA_COLOR(p) : 'bg-bg-input text-text-muted'}`}>{p}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[9px] text-text-muted truncate">{PA_LABELS[p]}</div>
-                              <div className={`text-[11px] font-bold truncate ${active ? 'text-warning' : 'text-text-muted/50'}`}>
-                                {active ? String(val) : 'null'}
-                              </div>
+                          <div key={p} className={`flex flex-col gap-1 px-2.5 py-2 rounded-lg cursor-pointer hover:brightness-110 transition-all
+                            ${active ? 'bg-warning/10 border border-warning/30' : 'bg-bg-input/30 border border-transparent'}`}
+                            onClick={e => { e.stopPropagation(); setWriteCtrl(prev => ({ ...prev, [m.id]: { ...wc, priority: String(p), result: null } })); }}>
+                            <span className={`text-xs font-bold w-6 h-6 rounded flex items-center justify-center self-start ${active ? PA_COLOR(p) : 'bg-bg-input text-text-muted'}`}>{p}</span>
+                            <div className="text-[8px] text-text-muted leading-tight">{PA_LABELS[p]}</div>
+                            <div className={`text-xs font-bold ${active ? 'text-warning' : 'text-text-muted/40'}`}>
+                              {active ? String(val) : '—'}
                             </div>
                           </div>
                         );
                       })}
                     </div>
+                    <div className="text-[9px] text-text-muted mt-1.5">💡 Click một ô để chọn priority đó trong control trên</div>
                   </div>
                 )}
               </div>
