@@ -14,6 +14,10 @@ import { AnomalyPage } from './components/AnomalyPage';
 import { LoginPage } from './components/LoginPage';
 import { ToastContainer } from './components/ToastContainer';
 import { ExportPage } from './components/ExportPage';
+import {
+  LayoutDashboard, Activity, Replace, Eye, TrendingUp, Settings,
+  Cable, Users, FileText, Clock, AlertTriangle, Download, Menu, X,
+} from 'lucide-react';
 
 // ── Auth Context ──────────────────────────────────────────────
 export const AuthContext = createContext({ user: null, token: null, logout: () => {}, apiFetch: null });
@@ -31,10 +35,64 @@ export function makeApiFetch(token) {
   };
 }
 
+// ── Bottom nav items (most-used on mobile) ────────────────────
+const BOTTOM_NAV = [
+  { page: 'dashboard',     icon: LayoutDashboard, label: 'Home' },
+  { page: 'device-health', icon: Activity,        label: 'Health' },
+  { page: 'monitor',       icon: Eye,             label: 'Monitor' },
+  { page: 'mappings',      icon: Replace,         label: 'Maps' },
+  { page: 'more',          icon: Menu,            label: 'More' },
+];
+
+// All pages for the "More" drawer
+const MORE_ITEMS = [
+  { page: 'devices',   icon: Cable,         label: 'Devices' },
+  { page: 'groups',    icon: Users,         label: 'Groups' },
+  { page: 'charts',    icon: TrendingUp,    label: 'Trending' },
+  { page: 'logs',      icon: FileText,      label: 'Logs' },
+  { page: 'scheduler', icon: Clock,         label: 'Scheduler' },
+  { page: 'anomaly',   icon: AlertTriangle, label: 'Anomaly' },
+  { page: 'export',    icon: Download,      label: 'Export' },
+  { page: 'settings',  icon: Settings,      label: 'Settings' },
+];
+
+function MobileMoreDrawer({ activePage, onNavigate, onClose }) {
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden" onClick={onClose} />
+      {/* Drawer sliding up from bottom */}
+      <div className="fixed bottom-16 left-0 right-0 z-50 md:hidden animate-slide-up">
+        <div className="mx-3 mb-2 bg-bg-secondary border border-border rounded-2xl shadow-2xl overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+            <span className="text-sm font-bold text-white">More</span>
+            <button onClick={onClose} className="p-1 rounded text-text-muted hover:text-white">
+              <X size={16} />
+            </button>
+          </div>
+          <div className="grid grid-cols-4 gap-0 p-3">
+            {MORE_ITEMS.map(({ page, icon: Icon, label }) => (
+              <button key={page} onClick={() => { onNavigate(page); onClose(); }}
+                className={`flex flex-col items-center gap-1.5 py-3 px-1 rounded-xl transition-all ${
+                  activePage === page
+                    ? 'bg-accent-primary/15 text-accent-primary'
+                    : 'text-text-secondary hover:bg-white/5 hover:text-white'
+                }`}>
+                <Icon size={22} />
+                <span className="text-[10px] font-medium text-center leading-tight">{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [page, setPage] = useState('dashboard');
-  const [authChecked, setAuthChecked] = useState(false);   // waiting for /api/auth/status
-  const [authEnabled, setAuthEnabled] = useState(false);    // server requires login?
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authEnabled, setAuthEnabled] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch { return null; }
@@ -42,6 +100,7 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
     localStorage.getItem('sidebar_collapsed') === 'true'
   );
+  const [showMore, setShowMore] = useState(false);
 
   const toggleSidebar = () => setSidebarCollapsed(prev => {
     const next = !prev;
@@ -49,18 +108,18 @@ function App() {
     return next;
   });
 
-  // Check if auth is enabled on server
+  const navigate = (p) => {
+    setPage(p);
+    setShowMore(false);
+  };
+
   useEffect(() => {
     fetch('/api/auth/status')
       .then(r => r.json())
-      .then(data => {
-        setAuthEnabled(data.auth_enabled);
-        setAuthChecked(true);
-      })
+      .then(data => { setAuthEnabled(data.auth_enabled); setAuthChecked(true); })
       .catch(() => setAuthChecked(true));
   }, []);
 
-  // Validate existing token on mount (if auth enabled)
   useEffect(() => {
     if (!authEnabled || !token) return;
     makeApiFetch(token)('/api/auth/me')
@@ -86,13 +145,8 @@ function App() {
 
   const apiFetch = makeApiFetch(token);
 
-  // Show nothing while checking auth
   if (!authChecked) return null;
-
-  // Show LoginPage if auth enabled and not logged in
-  if (authEnabled && !token) {
-    return <LoginPage onLogin={handleLogin} />;
-  }
+  if (authEnabled && !token) return <LoginPage onLogin={handleLogin} />;
 
   const authCtx = {
     user: user || { username: 'anonymous', role: 'admin' },
@@ -101,18 +155,41 @@ function App() {
     apiFetch,
   };
 
+  // Determine if active page is in "more" group for highlighting
+  const isMoreActive = MORE_ITEMS.some(i => i.page === page);
+
   return (
     <AuthContext.Provider value={authCtx}>
       <div className="min-h-screen bg-bg-primary text-text-primary">
         <ToastContainer />
-        <Sidebar activePage={page} onNavigate={setPage} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+
+        {/* Desktop sidebar (hidden on mobile via Sidebar component) */}
+        <Sidebar activePage={page} onNavigate={navigate} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+
+        {/* Main content */}
         <main
-          className="min-h-screen overflow-x-hidden transition-all duration-300"
+          className="min-h-screen overflow-x-hidden transition-all duration-300
+                     pb-20 md:pb-0"  // pb-20 for mobile bottom nav space
           style={{
-            marginLeft: sidebarCollapsed ? '64px' : '220px',
-            width: sidebarCollapsed ? 'calc(100vw - 64px)' : 'calc(100vw - 220px)',
+            // On md+: offset by sidebar width. On mobile: full width
+            marginLeft: `var(--sidebar-width, 0)`,
           }}
         >
+          {/* CSS custom property trick for responsive sidebar offset */}
+          <style>{`
+            @media (min-width: 768px) {
+              :root { --sidebar-width: ${sidebarCollapsed ? '64px' : '220px'}; }
+            }
+            @media (max-width: 767px) {
+              :root { --sidebar-width: 0px; }
+            }
+            @keyframes slideUp {
+              from { transform: translateY(20px); opacity: 0; }
+              to   { transform: translateY(0);    opacity: 1; }
+            }
+            .animate-slide-up { animation: slideUp 0.2s ease-out; }
+          `}</style>
+
           {page === 'dashboard'      && <Dashboard />}
           {page === 'devices'        && <DevicesPage />}
           {page === 'device-health'  && <DeviceHealthPage />}
@@ -126,6 +203,48 @@ function App() {
           {page === 'settings'       && <SettingsPage />}
           {page === 'export'         && <ExportPage />}
         </main>
+
+        {/* ── Mobile Bottom Navigation Bar ── */}
+        <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden
+                        bg-bg-secondary/95 backdrop-blur-xl border-t border-border
+                        safe-area-inset-bottom">
+          <div className="flex items-stretch h-16">
+            {BOTTOM_NAV.map(({ page: p, icon: Icon, label }) => {
+              const isActive = p === 'more' ? isMoreActive || showMore : page === p;
+              return (
+                <button
+                  key={p}
+                  onClick={() => {
+                    if (p === 'more') setShowMore(s => !s);
+                    else navigate(p);
+                  }}
+                  className={`flex-1 flex flex-col items-center justify-center gap-1 transition-all relative
+                    ${isActive ? 'text-accent-primary' : 'text-text-muted hover:text-white'}`}
+                >
+                  {/* Active dot indicator */}
+                  {isActive && (
+                    <span className="absolute top-0 left-1/2 -translate-x-1/2 w-6 h-0.5 rounded-b-full bg-accent-primary" />
+                  )}
+                  <Icon size={22} strokeWidth={isActive ? 2.2 : 1.8} />
+                  <span className={`text-[10px] font-medium ${isActive ? 'text-accent-primary' : ''}`}>
+                    {label}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {/* Safe area for notch phones */}
+          <div className="h-safe-bottom bg-bg-secondary/95" />
+        </nav>
+
+        {/* Mobile "More" drawer */}
+        {showMore && (
+          <MobileMoreDrawer
+            activePage={page}
+            onNavigate={navigate}
+            onClose={() => setShowMore(false)}
+          />
+        )}
       </div>
     </AuthContext.Provider>
   );
