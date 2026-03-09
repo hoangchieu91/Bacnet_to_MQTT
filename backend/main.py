@@ -1446,14 +1446,6 @@ async def purge_history(body: dict[str, Any]):
     return {"deleted": deleted, "mapping_id": mapping_id}
 
 
-@app.get("/api/history/{mapping_id}")
-async def get_history(mapping_id: str, start: str = None, end: str = None, limit: int = 500):
-    if not history_store:
-        return JSONResponse({"error": "History store not initialised"}, status_code=503)
-    data = history_store.query(mapping_id, start=start, end=end, limit=min(limit, 5000))
-    return {"mapping_id": mapping_id, "count": len(data), "records": data}
-
-
 @app.get("/api/history/multi")
 async def get_multi_history(
     ids: str = "",           # comma-separated mapping IDs; empty = all
@@ -1464,6 +1456,9 @@ async def get_multi_history(
     """Fetch history for multiple mapping IDs in one request.
     Returns: { series: { mapping_id: [{timestamp, value}] }, label_map: {id: label} }
     Used by the Trending page to avoid N parallel individual requests.
+
+    NOTE: This route MUST be declared before /api/history/{mapping_id} so FastAPI
+    does not greedily match 'multi' as a mapping_id path parameter.
     """
     if not history_store:
         return JSONResponse({"error": "History store not initialised"}, status_code=503)
@@ -1496,6 +1491,14 @@ async def get_multi_history(
         "total_rows": len(rows),
         "mapping_count": len(series),
     }
+
+
+@app.get("/api/history/{mapping_id}")
+async def get_history(mapping_id: str, start: str = None, end: str = None, limit: int = 500):
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    data = history_store.query(mapping_id, start=start, end=end, limit=min(limit, 5000))
+    return {"mapping_id": mapping_id, "count": len(data), "records": data}
 
 
 # ═══════════════════════════════════════════════
