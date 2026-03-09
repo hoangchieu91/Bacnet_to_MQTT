@@ -82,7 +82,25 @@ function DeviceModal({ device, onClose }) {
     mqtt_topic: '', poll_interval: 30, group: '', read_mode: 'poll',
   });
   const [saving, setSaving] = useState(false);
-  const [result, setResult] = useState(null); // {ok, msg}
+  const [result, setResult] = useState(null);
+  const [history, setHistory] = useState(null); // null=not loaded, {incidents, offline_count}
+  const [histLoading, setHistLoading] = useState(false);
+
+  const loadHistory = async () => {
+    if (history !== null) return; // already loaded
+    setHistLoading(true);
+    try {
+      const res = await fetch(`/api/devices/${device.device_id}/offline-history?limit=100`);
+      const data = await res.json();
+      setHistory(data);
+    } catch { setHistory({ incidents: [], offline_count: 0 }); }
+    setHistLoading(false);
+  };
+
+  const handleTabChange = (k) => {
+    setTab(k); setResult(null);
+    if (k === 'history') loadHistory();
+  };
 
   const handleAdd = async () => {
     if (!form.object_instance) { setResult({ ok: false, msg: 'Object Instance is required' }); return; }
@@ -110,18 +128,24 @@ function DeviceModal({ device, onClose }) {
       } else {
         setResult({ ok: false, msg: data.detail || data.error || 'Failed to add' });
       }
-    } catch (e) {
-      setResult({ ok: false, msg: String(e) });
-    }
+    } catch (e) { setResult({ ok: false, msg: String(e) }); }
     setSaving(false);
+  };
+
+  const fmtTs = (iso) => {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleString('vi-VN', { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    } catch { return iso; }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-lg mx-4">
+      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             <StatusDot online={device.online} size="lg" />
             <div>
@@ -133,98 +157,163 @@ function DeviceModal({ device, onClose }) {
         </div>
 
         {/* Tabs */}
-        <div className="flex border-b border-border">
-          {[['info','📊 Info'],['add','➕ Add Point']].map(([k,lbl]) => (
-            <button key={k} onClick={() => { setTab(k); setResult(null); }}
-              className={`px-5 py-2.5 text-xs font-bold transition-colors ${tab===k ? 'text-accent-primary border-b-2 border-accent-primary' : 'text-text-muted hover:text-white'}`}>
+        <div className="flex border-b border-border shrink-0">
+          {[
+            ['info', '📊 Info'],
+            ['add', '➕ Add Point'],
+            ['history', '📋 Offline History'],
+          ].map(([k, lbl]) => (
+            <button key={k} onClick={() => handleTabChange(k)}
+              className={`relative px-4 py-2.5 text-xs font-bold transition-colors whitespace-nowrap ${tab===k ? 'text-accent-primary border-b-2 border-accent-primary' : 'text-text-muted hover:text-white'}`}>
               {lbl}
+              {/* Badge: show offline count on History tab */}
+              {k === 'history' && history && history.offline_count > 0 && (
+                <span className="absolute -top-1 -right-1 bg-error text-white text-[8px] font-bold px-1 rounded-full min-w-[14px] text-center">
+                  {history.offline_count}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
-        {tab === 'info' ? (
-          <div className="p-5 grid grid-cols-2 gap-3">
-            {[['Name',device.name||'—'],['Network',p.network],['Address',device.address||'—'],['Node',p.node||'—'],
-              ['Status',device.online===true?'🟢 Online':device.online===false?'🔴 Offline':'⏳ Pending'],
-              ['Points',`${device.point_count||0} mapped`],['Fail Count',device.fail_count||0],['Last Seen',timeSince(device.last_seen)]]
-              .map(([k,v])=>(
-                <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
-                  <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
-                  <div className="text-sm font-medium text-white truncate">{String(v)}</div>
-                </div>
-            ))}
-          </div>
-        ) : (
-          <div className="p-5 space-y-3">
-            <p className="text-[11px] text-text-muted">Add a BACnet point mapping for <b className="text-white">Device #{device.device_id}</b></p>
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* Object Type */}
-              <div className="col-span-2">
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Type</label>
-                <select value={form.object_type} onChange={e => setForm(f=>({...f,object_type:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus">
-                  {OBJ_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
-              </div>
-
-              {/* Object Instance */}
-              <div>
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Instance *</label>
-                <input type="number" min="0" placeholder="e.g. 1" value={form.object_instance}
-                  onChange={e => setForm(f=>({...f,object_instance:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
-              </div>
-
-              {/* Poll interval */}
-              <div>
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Poll Interval (s)</label>
-                <input type="number" min="5" value={form.poll_interval}
-                  onChange={e => setForm(f=>({...f,poll_interval:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
-              </div>
-
-              {/* Label */}
-              <div>
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Label</label>
-                <input type="text" placeholder="e.g. Room Temp" value={form.label}
-                  onChange={e => setForm(f=>({...f,label:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
-              </div>
-
-              {/* Group */}
-              <div>
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Group</label>
-                <input type="text" placeholder="e.g. HVAC" value={form.group}
-                  onChange={e => setForm(f=>({...f,group:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
-              </div>
-
-              {/* MQTT Topic */}
-              <div className="col-span-2">
-                <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">MQTT Topic <span className="normal-case text-text-muted">(optional — auto if blank)</span></label>
-                <input type="text" placeholder="e.g. building/floor3/temp" value={form.mqtt_topic}
-                  onChange={e => setForm(f=>({...f,mqtt_topic:e.target.value}))}
-                  className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
-              </div>
+        {/* Tab content */}
+        <div className="flex-1 overflow-y-auto">
+          {tab === 'info' && (
+            <div className="p-5 grid grid-cols-2 gap-3">
+              {[['Name',device.name||'—'],['Network',p.network],['Address',device.address||'—'],['Node',p.node||'—'],
+                ['Status',device.online===true?'🟢 Online':device.online===false?'🔴 Offline':'⏳ Pending'],
+                ['Points',`${device.point_count||0} mapped`],['Fail Count',device.fail_count||0],['Last Seen',timeSince(device.last_seen)]]
+                .map(([k,v])=>(
+                  <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
+                    <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
+                    <div className="text-sm font-medium text-white truncate">{String(v)}</div>
+                  </div>
+              ))}
             </div>
+          )}
 
-            {result && (
-              <div className={`text-xs px-3 py-2 rounded-lg ${result.ok ? 'bg-success/10 text-success border border-success/30' : 'bg-error/10 text-error border border-error/30'}`}>
-                {result.msg}
+          {tab === 'add' && (
+            <div className="p-5 space-y-3">
+              <p className="text-[11px] text-text-muted">Add a BACnet point mapping for <b className="text-white">Device #{device.device_id}</b></p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Type</label>
+                  <select value={form.object_type} onChange={e => setForm(f=>({...f,object_type:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus">
+                    {OBJ_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Object Instance *</label>
+                  <input type="number" min="0" placeholder="e.g. 1" value={form.object_instance}
+                    onChange={e => setForm(f=>({...f,object_instance:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Poll Interval (s)</label>
+                  <input type="number" min="5" value={form.poll_interval}
+                    onChange={e => setForm(f=>({...f,poll_interval:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Label</label>
+                  <input type="text" placeholder="e.g. Room Temp" value={form.label}
+                    onChange={e => setForm(f=>({...f,label:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                </div>
+                <div>
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Group</label>
+                  <input type="text" placeholder="e.g. HVAC" value={form.group}
+                    onChange={e => setForm(f=>({...f,group:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                </div>
+                <div className="col-span-2">
+                  <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">MQTT Topic <span className="normal-case text-text-muted">(optional — auto if blank)</span></label>
+                  <input type="text" placeholder="e.g. building/floor3/temp" value={form.mqtt_topic}
+                    onChange={e => setForm(f=>({...f,mqtt_topic:e.target.value}))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                </div>
               </div>
-            )}
+              {result && (
+                <div className={`text-xs px-3 py-2 rounded-lg ${result.ok ? 'bg-success/10 text-success border border-success/30' : 'bg-error/10 text-error border border-error/30'}`}>
+                  {result.msg}
+                </div>
+              )}
+              <button onClick={handleAdd} disabled={saving || !form.object_instance}
+                className="w-full py-2.5 rounded-xl font-bold text-sm bg-gradient-to-r from-accent-primary to-purple-600 text-white disabled:opacity-50 hover:opacity-90 transition-all flex items-center justify-center gap-2">
+                {saving ? '⏳ Adding...' : '➕ Add Point Mapping'}
+              </button>
+            </div>
+          )}
 
-            <button onClick={handleAdd} disabled={saving || !form.object_instance}
-              className="w-full py-2.5 rounded-xl font-bold text-sm bg-gradient-to-r from-accent-primary to-purple-600 text-white disabled:opacity-50 hover:opacity-90 transition-all flex items-center justify-center gap-2">
-              {saving ? '⏳ Adding...' : '➕ Add Point Mapping'}
-            </button>
-          </div>
-        )}
+          {tab === 'history' && (
+            <div className="p-4">
+              {histLoading ? (
+                <div className="flex items-center justify-center py-10 text-text-muted text-sm">
+                  ⏳ Loading offline history...
+                </div>
+              ) : !history ? null : (
+                <>
+                  {/* Summary bar */}
+                  <div className="flex items-center gap-3 mb-4 px-4 py-3 rounded-xl bg-error/8 border border-error/20">
+                    <div className="text-3xl font-black text-error">{history.offline_count}</div>
+                    <div>
+                      <div className="text-sm font-bold text-white">Offline incident{history.offline_count !== 1 ? 's' : ''}</div>
+                      <div className="text-[10px] text-text-muted">recorded for Device #{device.device_id}</div>
+                    </div>
+                  </div>
+
+                  {history.incidents.length === 0 ? (
+                    <div className="text-center py-8 text-text-muted text-sm">
+                      🟢 No offline incidents recorded — device has been stable.
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {/* Header row */}
+                      <div className="grid grid-cols-[1fr_1fr_80px] gap-2 px-2 pb-1 border-b border-border/30">
+                        <div className="text-[9px] text-text-muted uppercase tracking-wider">Offline At</div>
+                        <div className="text-[9px] text-text-muted uppercase tracking-wider">Back Online At</div>
+                        <div className="text-[9px] text-text-muted uppercase tracking-wider text-right">Duration</div>
+                      </div>
+                      {history.incidents.map((inc, idx) => (
+                        <div key={idx}
+                          className={`grid grid-cols-[1fr_1fr_80px] gap-2 px-3 py-2.5 rounded-lg border text-xs
+                            ${!inc.online_at ? 'bg-error/10 border-error/30' : 'bg-bg-input/30 border-border/20 hover:bg-bg-input/50'}`}>
+                          {/* Offline time */}
+                          <div>
+                            <div className="text-error font-medium leading-tight">{fmtTs(inc.offline_at)}</div>
+                          </div>
+                          {/* Online time */}
+                          <div>
+                            {inc.online_at
+                              ? <div className="text-success font-medium leading-tight">{fmtTs(inc.online_at)}</div>
+                              : <div className="text-error/70 italic">Still offline</div>
+                            }
+                          </div>
+                          {/* Duration */}
+                          <div className="text-right">
+                            <span className={`font-bold ${!inc.online_at ? 'text-error' : 'text-text-secondary'}`}>
+                              {inc.duration_text}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-text-muted text-center mt-3">
+                    Showing {history.incidents.length} most recent incident{history.incidents.length !== 1 ? 's' : ''}
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
+
 
 /* ══════════════════════════════════════════════════════
    Network Accordion Card
