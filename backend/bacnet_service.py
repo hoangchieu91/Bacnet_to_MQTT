@@ -667,12 +667,27 @@ class BacnetService:
 
         try:
             ot = _normalize_type(object_type)
-            request_str = f"{address} {ot} {object_instance} presentValue {value} - {priority}"
+
+            # Normalize value: BAC0 _write() expects numeric for binary (1/0), not 'active'/'inactive'
+            write_val = value
+            ot_lower = ot.lower()
+            if ot_lower in ("binaryoutput", "binaryvalue", "bo", "bv"):
+                if isinstance(write_val, str):
+                    if write_val.lower() in ("active", "on", "true", "1", "yes"):
+                        write_val = 1
+                    else:
+                        write_val = 0
+                elif isinstance(write_val, bool):
+                    write_val = int(write_val)
+            elif isinstance(write_val, float) and write_val == int(write_val):
+                write_val = int(write_val)  # send 22 not 22.0 for cleaner request
+
+            request_str = f"{address} {ot} {object_instance} presentValue {write_val} - {priority}"
             logger.info("Write request (awaited): %s", request_str)
             # Use _write (async) directly — write() is fire-and-forget!
             response = await self._network._write(request_str)
             logger.info("Write response: %s %s %d = %s @P%d -> %s",
-                        address, object_type, object_instance, value, priority, response)
+                        address, object_type, object_instance, write_val, priority, response)
             return True, ""
         except Exception as exc:
             err_msg = str(exc)
@@ -683,13 +698,14 @@ class BacnetService:
                 return False, "Write Access Denied — point is read-only"
             if 'unknownProperty' in err_msg:
                 return False, "Object does not support writing"
-            if 'invalidDataType' in err_msg:
-                return False, "Invalid value format for this object type"
+            if 'invalidDataType' in err_msg or 'Invalid value for property' in err_msg:
+                return False, f"Invalid value '{value}' for {object_type}"
             if 'NoResponseFromController' in err_msg or 'no response' in err_msg.lower():
                 return False, "No response from device — check network connection"
             if 'Abort' in err_msg:
                 return False, f"Device aborted write: {err_msg}"
             return False, err_msg
+
 
     # ── release ────────────────────────────────
     async def release_priority(
