@@ -48,6 +48,7 @@ function RuleFormModal({ rule, mappings, onSave, onClose }) {
     notify_topic: rule?.notify_topic || '',
     enabled: rule?.enabled !== false,
   });
+  const [hasResponse, setHasResponse] = useState(!!(rule?.expected_mapping_id));
   const [saving, setSaving] = useState(false);
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -58,6 +59,9 @@ function RuleFormModal({ rule, mappings, onSave, onClose }) {
       ...form,
       trigger_condition: `${form.trigger_op}:${form.trigger_val}`,
       tolerance_seconds: Number(form.tolerance_seconds),
+      // Clear response fields if not tracking response
+      expected_mapping_id: hasResponse ? form.expected_mapping_id : '',
+      expected_value: hasResponse ? form.expected_value : '',
     };
     delete payload.trigger_op; delete payload.trigger_val;
     await onSave(payload);
@@ -103,26 +107,51 @@ function RuleFormModal({ rule, mappings, onSave, onClose }) {
         </div>
 
         <div className="bg-bg-input/30 rounded-xl p-4 border border-border/40 space-y-3">
-          <div className="text-[10px] uppercase tracking-widest text-success/80 font-bold">🟢 Expected — then this point must respond</div>
-          <div>
-            <label className={LABEL_CLS}>Response Point *</label>
-            <select className={SELECT_CLS} required value={form.expected_mapping_id} onChange={e => set('expected_mapping_id', e.target.value)}>
-              <option value="">— Select point —</option>
-              {mappings.map(m => <option key={m.id} value={m.id}>{m.label || `Dev${m.device_id} ${m.object_type}:${m.object_instance}`}</option>)}
-            </select>
+          {/* Header with toggle */}
+          <div className="flex items-center justify-between">
+            <div className="text-[10px] uppercase tracking-widest text-success/80 font-bold">🟢 Expected — then this point must respond</div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <span className="text-xs text-text-muted">{hasResponse ? 'Enabled' : 'Alarm only'}</span>
+              <div className="relative inline-block w-9 h-5">
+                <input type="checkbox" checked={hasResponse} onChange={e => setHasResponse(e.target.checked)} className="sr-only peer" />
+                <div className="w-9 h-5 rounded-full bg-bg-input border border-border peer-checked:bg-success/70 peer-checked:border-success/70 transition-all" />
+                <div className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-text-muted peer-checked:bg-white peer-checked:translate-x-4 transition-all" />
+              </div>
+            </label>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={LABEL_CLS}>Expected Value *</label>
-              <input className={INPUT_CLS} required placeholder="e.g. cooling or 1 or active"
-                value={form.expected_value} onChange={e => set('expected_value', e.target.value)} />
+
+          {hasResponse ? (
+            <>
+              <div>
+                <label className={LABEL_CLS}>Response Point *</label>
+                <select className={SELECT_CLS} required value={form.expected_mapping_id} onChange={e => set('expected_mapping_id', e.target.value)}>
+                  <option value="">— Select point —</option>
+                  {mappings.map(m => <option key={m.id} value={m.id}>{m.label || `Dev${m.device_id} ${m.object_type}:${m.object_instance}`}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={LABEL_CLS}>Expected Value *</label>
+                  <input className={INPUT_CLS} required placeholder="e.g. cooling or 1 or active"
+                    value={form.expected_value} onChange={e => set('expected_value', e.target.value)} />
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>Grace Period (s)</label>
+                  <input className={INPUT_CLS} type="number" min="5" max="3600"
+                    value={form.tolerance_seconds} onChange={e => set('tolerance_seconds', e.target.value)} />
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="text-xs text-text-muted bg-bg-input/40 rounded-lg p-3 border border-border/30">
+              <span className="text-warning font-medium">⚡ Alarm mode:</span> Alarm triggers immediately when condition is met. No response tracking.
+              <div className="mt-2">
+                <label className={LABEL_CLS}>Grace Period (s) — delay before alarm (0 = immediate)</label>
+                <input className={INPUT_CLS} type="number" min="0" max="3600"
+                  value={form.tolerance_seconds} onChange={e => set('tolerance_seconds', e.target.value)} />
+              </div>
             </div>
-            <div>
-              <label className={LABEL_CLS}>Grace Period (s)</label>
-              <input className={INPUT_CLS} type="number" min="5" max="3600"
-                value={form.tolerance_seconds} onChange={e => set('tolerance_seconds', e.target.value)} />
-            </div>
-          </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -328,9 +357,18 @@ export function AnomalyPage() {
                   <div className="text-xs text-text-muted">
                     When <span className="text-white">{labelOf(rule.trigger_mapping_id)}</span>
                     {' '}<span className="text-accent-primary">{rule.trigger_condition}</span>
-                    {' '}&rarr; expect <span className="text-white">{labelOf(rule.expected_mapping_id)}</span>
-                    {' '}= <span className="text-success">{rule.expected_value}</span>
-                    {' '}within <span className="text-info">{rule.tolerance_seconds}s</span>
+                    {rule.expected_mapping_id ? (
+                      <>
+                        {' '}&rarr; expect <span className="text-white">{labelOf(rule.expected_mapping_id)}</span>
+                        {' '}= <span className="text-success">{rule.expected_value}</span>
+                        {' '}within <span className="text-info">{rule.tolerance_seconds}s</span>
+                      </>
+                    ) : (
+                      <>
+                        {' '}→ <span className="text-warning">⚡ alarm</span>
+                        {rule.tolerance_seconds > 0 && <> after <span className="text-info">{rule.tolerance_seconds}s</span></>}
+                      </>
+                    )}
                   </div>
                 </div>
 

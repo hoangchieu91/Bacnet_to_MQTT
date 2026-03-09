@@ -8,6 +8,21 @@ from typing import Any
 
 from backend.models import BacnetConfig, BacnetDevice, BacnetObject
 
+# Object types we can meaningfully read present_value from via BACnet.
+# Everything NOT in this set (notificationClass, file, program, calendar,
+# schedule, trendLog, eventEnrollment, loop, command, averaging, etc.)
+# is silently skipped during object-list scan and cannot be mapped.
+POLLABLE_TYPES: frozenset[str] = frozenset({
+    "analogInput", "analogOutput", "analogValue",
+    "binaryInput", "binaryOutput", "binaryValue",
+    "multiStateInput", "multiStateOutput", "multiStateValue",
+    "device",
+    # alternate hyphenated forms sometimes returned by BAC0
+    "analog-input", "analog-output", "analog-value",
+    "binary-input", "binary-output", "binary-value",
+    "multi-state-input", "multi-state-output", "multi-state-value",
+})
+
 logger = logging.getLogger(__name__)
 
 # Map hyphenated BACnet type names to camelCase (what BAC0 expects)
@@ -63,6 +78,11 @@ class BacnetService:
             else:
                 ip_str = None
 
+            # Silence BAC0 debug spam BEFORE creating Lite instance
+            import logging as _logging
+            for _n in ('BAC0_Root', 'BAC0', 'bacpypes', 'BACpypes3'):
+                _logging.getLogger(_n).setLevel(_logging.WARNING)
+
             self._network = BAC0.lite(
                 ip=ip_str,
                 port=self._config.port,
@@ -70,6 +90,13 @@ class BacnetService:
 
             # Wait for BACpypes3 transport tasks to complete
             await asyncio.sleep(2)
+
+            # BAC0 Lite resets its own loggers during __init__, so suppress AGAIN after init
+            for _n in ('BAC0_Root', 'BAC0', 'bacpypes', 'BACpypes3',
+                       'BAC0_Root.BAC0.scripts', 'BAC0_Root.BAC0.core', 'BAC0_Root.BAC0.tasks'):
+                _l = _logging.getLogger(_n)
+                _l.setLevel(_logging.WARNING)
+                _l.propagate = False
 
             # Restore broadcast socket patch (vital for gateway operation)
             try:
@@ -560,7 +587,15 @@ class BacnetService:
                         except Exception as e:
                             logger.debug("Skip unparseable object: %s (%s)", item, e)
 
-                logger.info("Device %d: %d objects found, reading names...", device_id, len(raw_objects))
+                # Filter to pollable types only — skip notificationClass, file, program, etc.
+                filtered_raw = [(ot, oi) for ot, oi in raw_objects if ot.lower() in {t.lower() for t in POLLABLE_TYPES}]
+                skipped = len(raw_objects) - len(filtered_raw)
+                if skipped:
+                    logger.info("Device %d: skipped %d non-pollable objects (NOT/FIL/PRG/…)", device_id, skipped)
+                raw_objects = filtered_raw
+
+                logger.info("Device %d: %d pollable objects found, reading names...", device_id, len(raw_objects))
+
 
                 # Read names sequentially (avoid BAC0 queue saturation)
                 for ot, oi in raw_objects:

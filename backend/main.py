@@ -8,8 +8,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -30,12 +31,19 @@ from backend.models import (
     ReleaseRequest,
     ScheduleEntry,
     StatusResponse,
+    UserConfig,
+    WebhookConfig,
     WriteRequest,
+)
+from backend.auth_service import (
+    hash_password, verify_password, create_token,
+    require_auth, require_operator, require_admin,
 )
 from backend.mqtt_service import MqttService
 from backend.websocket_manager import WebSocketManager
 from backend.health_monitor import get_system_health, check_ram_for_new_points
 from backend.device_registry import DeviceRegistry
+from backend.webhook_service import WebhookService
 
 # ── Logging setup ──────────────────────────────
 logging.basicConfig(
@@ -55,12 +63,13 @@ gateway_engine: GatewayEngine | None = None
 history_store: HistoryStore | None = None
 scheduler_service: SchedulerService | None = None
 device_registry: DeviceRegistry | None = None
+webhook_service: WebhookService | None = None
 
 
 # ── Lifespan (startup / shutdown) ──────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry
+    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry, webhook_service
 
     # Load config
     cfg = config_manager.load()
@@ -76,9 +85,11 @@ async def lifespan(app: FastAPI):
     # Initialise services
     bacnet_service = BacnetService(cfg.bacnet)
     mqtt_service = MqttService(cfg.mqtt)
+    webhook_service = WebhookService(config_manager)
     gateway_engine = GatewayEngine(
         config_manager, bacnet_service, mqtt_service, ws_manager,
         history_store=history_store,
+        webhook_service=webhook_service,
     )
 
     # Initialize AnomalyEngine and wire to gateway
@@ -169,19 +180,23 @@ async def _auto_start_gateway():
     logger.info("[Auto-Start] Discovering %d device(s): %s", len(device_ids), device_ids)
     try:
         # Use full broadcast — BAC0 specific WHO-IS often times out on first boot
-        await bacnet_service.discover_devices(scan_mode="full", timeout=10)
+        discovered = await bacnet_service.discover_devices(scan_mode="full", timeout=10)
         await asyncio.sleep(2)
         found = len(bacnet_service._devices)
         logger.info("[Auto-Start] Discovery round 1: found %d device(s).", found)
+        if discovered and gateway_engine:
+            gateway_engine.register_discovered_devices(discovered)
 
         # Retry if no devices found
         if found == 0:
             logger.info("[Auto-Start] Retrying discovery with longer timeout…")
             await asyncio.sleep(3)
-            await bacnet_service.discover_devices(scan_mode="full", timeout=15)
+            discovered = await bacnet_service.discover_devices(scan_mode="full", timeout=15)
             await asyncio.sleep(3)
             found = len(bacnet_service._devices)
             logger.info("[Auto-Start] Discovery round 2: found %d device(s).", found)
+            if discovered and gateway_engine:
+                gateway_engine.register_discovered_devices(discovered)
     except Exception as exc:
         logger.warning("[Auto-Start] Device discovery error: %s — proceeding anyway", exc)
 
@@ -213,6 +228,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Compress static assets & API responses — reduces 1.8MB JS to ~510KB
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # ── Static frontend serving ───────────────────
@@ -253,12 +270,9 @@ async def get_health():
 @app.get("/api/devices/health")
 async def get_devices_health():
     """Return bulk health status of all known BACnet devices.
-    Merges discovered device list with live polling status from GatewayEngine.
-    Used by the Device Health tile grid in the frontend.
+    Merges: persisted known_devices + currently discovered + mapping devices.
+    Devices are tracked via background ping even without mappings.
     """
-    if not bacnet_service:
-        return {"devices": []}
-
     poll_status = gateway_engine.get_device_status() if gateway_engine else {}
     # Build a per-device point count index from mappings
     point_counts: dict[int, int] = {}
@@ -266,23 +280,44 @@ async def get_devices_health():
         point_counts[m.device_id] = point_counts.get(m.device_id, 0) + 1
 
     devices_out = []
-    for dev in bacnet_service.discovered_devices:
-        dev_id = dev.device_id
+    seen_ids: set[int] = set()
+
+    # 1. Known devices (persisted across restarts — the main source)
+    known = gateway_engine.get_known_devices() if gateway_engine else {}
+    for dev_id, info in known.items():
         ps = poll_status.get(dev_id, {})
         devices_out.append({
             "device_id": dev_id,
-            "name": dev.device_name or f"Device {dev_id}",
-            "address": dev.address,
-            "online": ps.get("online", True),         # default True if never polled
+            "name": info.get("name") or f"Device {dev_id}",
+            "address": info.get("address"),
+            "online": ps.get("online", None),        # None = never pinged yet
             "fail_count": ps.get("fail_count", 0),
             "last_seen": ps.get("last_seen"),
             "point_count": point_counts.get(dev_id, 0),
         })
+        seen_ids.add(dev_id)
 
-    # Also include devices in mappings that weren't discovered (offline)
-    discovered_ids = {d.device_id for d in bacnet_service.discovered_devices}
+    # 2. Currently discovered (in-memory) but not yet persisted
+    if bacnet_service:
+        for dev in bacnet_service.discovered_devices:
+            dev_id = dev.device_id
+            if dev_id in seen_ids:
+                continue
+            ps = poll_status.get(dev_id, {})
+            devices_out.append({
+                "device_id": dev_id,
+                "name": dev.device_name or f"Device {dev_id}",
+                "address": dev.address,
+                "online": ps.get("online", True),
+                "fail_count": ps.get("fail_count", 0),
+                "last_seen": ps.get("last_seen"),
+                "point_count": point_counts.get(dev_id, 0),
+            })
+            seen_ids.add(dev_id)
+
+    # 3. Devices in mappings but never discovered
     for dev_id, count in point_counts.items():
-        if dev_id not in discovered_ids:
+        if dev_id not in seen_ids:
             ps = poll_status.get(dev_id, {})
             devices_out.append({
                 "device_id": dev_id,
@@ -294,7 +329,7 @@ async def get_devices_health():
                 "point_count": count,
             })
 
-    devices_out.sort(key=lambda d: (not d["online"], d["device_id"]))
+    devices_out.sort(key=lambda d: (d["online"] is False, d["online"] is None, d["device_id"]))
     return {"devices": devices_out, "total": len(devices_out)}
 
 
@@ -446,6 +481,9 @@ async def discover_devices(req: DiscoveryRequest | None = None):
             high_id=req.high_id if req else None,
             device_id=req.device_id if req else None,
         )
+        # Register discovered devices for persistent tracking + background ping
+        if gateway_engine and devices:
+            gateway_engine.register_discovered_devices(devices)
         return {"devices": [d.model_dump() for d in devices], "scan_mode": scan_mode}
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -683,11 +721,26 @@ async def diagnose_device(device_id: int):
     return results
 
 
+def _resolve_address(device_id: int) -> str | None:
+    """Resolve BACnet address for device_id.
+    First checks live in-memory _devices, then falls back to persistent device_registry.
+    """
+    if bacnet_service:
+        addr = bacnet_service.get_device_address(device_id)
+        if addr:
+            return addr
+    if device_registry:
+        reg = device_registry.get_device(device_id)
+        if reg:
+            return reg.get("address") if isinstance(reg, dict) else getattr(reg, "address", None)
+    return None
+
+
 @app.post("/api/bacnet/write")
 async def write_bacnet(req: WriteRequest):
     if not bacnet_service:
         return JSONResponse({"error": "BACnet service not available"}, status_code=500)
-    address = bacnet_service.get_device_address(req.device_id)
+    address = _resolve_address(req.device_id)
     if not address:
         return JSONResponse({"error": f"Device {req.device_id} not found"}, status_code=404)
     ok, err = await bacnet_service.write_object(
@@ -703,7 +756,7 @@ async def release_bacnet(req: ReleaseRequest):
     """Release (null) a single priority or all priorities 1–16."""
     if not bacnet_service:
         return JSONResponse({"error": "BACnet service not available"}, status_code=500)
-    address = bacnet_service.get_device_address(req.device_id)
+    address = _resolve_address(req.device_id)
     if not address:
         return JSONResponse({"error": f"Device {req.device_id} not found"}, status_code=404)
 
@@ -726,7 +779,7 @@ async def read_priority_array(device_id: int, object_type: str, object_instance:
     """Read the 16-level priority array of a BACnet object."""
     if not bacnet_service:
         return JSONResponse({"error": "BACnet service not available"}, status_code=500)
-    address = bacnet_service.get_device_address(device_id)
+    address = _resolve_address(device_id)
     if not address:
         return JSONResponse({"error": f"Device {device_id} not found"}, status_code=404)
     pa = await bacnet_service.read_priority_array(address, object_type, object_instance)
@@ -793,6 +846,156 @@ async def delete_group(group_id: str):
 
 
 # ═══════════════════════════════════════════════
+# REST API — Webhooks
+# ═══════════════════════════════════════════════
+@app.get("/api/webhooks")
+async def list_webhooks():
+    webhooks = getattr(config_manager.config, "webhooks", [])
+    return {"webhooks": [w.model_dump() for w in webhooks]}
+
+
+@app.post("/api/webhooks")
+async def create_webhook(wh: WebhookConfig):
+    from uuid import uuid4
+    if not wh.id:
+        wh.id = str(uuid4())
+    webhooks = getattr(config_manager.config, "webhooks", [])
+    webhooks.append(wh)
+    config_manager.config.webhooks = webhooks
+    config_manager.save()
+    return wh.model_dump()
+
+
+@app.put("/api/webhooks/{wh_id}")
+async def update_webhook(wh_id: str, data: dict):
+    webhooks = getattr(config_manager.config, "webhooks", [])
+    for i, w in enumerate(webhooks):
+        if w.id == wh_id:
+            updated = w.model_copy(update=data)
+            webhooks[i] = updated
+            config_manager.config.webhooks = webhooks
+            config_manager.save()
+            return updated.model_dump()
+    return JSONResponse({"error": "Webhook not found"}, status_code=404)
+
+
+@app.delete("/api/webhooks/{wh_id}")
+async def delete_webhook(wh_id: str):
+    webhooks = getattr(config_manager.config, "webhooks", [])
+    before = len(webhooks)
+    config_manager.config.webhooks = [w for w in webhooks if w.id != wh_id]
+    if len(config_manager.config.webhooks) == before:
+        return JSONResponse({"error": "Webhook not found"}, status_code=404)
+    config_manager.save()
+    return {"status": "deleted"}
+
+
+@app.post("/api/webhooks/{wh_id}/test")
+async def test_webhook(wh_id: str):
+    if not webhook_service:
+        return JSONResponse({"error": "Webhook service not initialised"}, status_code=503)
+    webhooks = getattr(config_manager.config, "webhooks", [])
+    wh = next((w for w in webhooks if w.id == wh_id), None)
+    if not wh:
+        return JSONResponse({"error": "Webhook not found"}, status_code=404)
+    result = await webhook_service.send_test(wh)
+    return result
+
+
+# ═══════════════════════════════════════════════
+# REST API — Authentication
+# ═══════════════════════════════════════════════
+@app.post("/api/auth/login")
+async def login(body: dict):
+    """Public endpoint — returns JWT token if credentials valid."""
+    username = body.get("username", "").strip()
+    password = body.get("password", "")
+    users = getattr(config_manager.config, "users", [])
+
+    # Auth disabled mode
+    if not users:
+        return {"token": None, "role": "admin", "username": "anonymous", "auth_enabled": False}
+
+    user = next((u for u in users if u.username == username and u.enabled), None)
+    if not user or not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_token(user.id, user.username, user.role)
+    return {"token": token, "role": user.role, "username": user.username, "auth_enabled": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(payload: dict = Depends(require_auth)):
+    """Return current user info from token."""
+    return {"username": payload.get("username"), "role": payload.get("role"),
+            "auth_enabled": bool(getattr(config_manager.config, "users", []))}
+
+
+@app.get("/api/auth/status")
+async def auth_status():
+    """Public — tells frontend whether auth is enabled."""
+    return {"auth_enabled": bool(getattr(config_manager.config, "users", []))}
+
+
+# ── User management (Admin only) ──────────────
+@app.get("/api/users")
+async def list_users(_: dict = Depends(require_admin)):
+    users = getattr(config_manager.config, "users", [])
+    return {"users": [{"id": u.id, "username": u.username, "role": u.role, "enabled": u.enabled} for u in users]}
+
+
+@app.post("/api/users")
+async def create_user(body: dict, _: dict = Depends(require_admin)):
+    from uuid import uuid4
+    username = body.get("username", "").strip()
+    password = body.get("password", "").strip()
+    role = body.get("role", "viewer")
+    if not username or not password:
+        return JSONResponse({"error": "username and password required"}, status_code=400)
+    if role not in ("admin", "operator", "viewer"):
+        return JSONResponse({"error": "role must be admin, operator, or viewer"}, status_code=400)
+    users = list(getattr(config_manager.config, "users", []))
+    if any(u.username == username for u in users):
+        return JSONResponse({"error": "Username already exists"}, status_code=409)
+    from backend.models import UserConfig
+    new_user = UserConfig(id=str(uuid4()), username=username, hashed_password=hash_password(password), role=role)
+    users.append(new_user)
+    config_manager.config.users = users
+    config_manager.save()
+    return {"id": new_user.id, "username": new_user.username, "role": new_user.role, "enabled": new_user.enabled}
+
+
+@app.put("/api/users/{user_id}")
+async def update_user(user_id: str, body: dict, _: dict = Depends(require_admin)):
+    users = list(getattr(config_manager.config, "users", []))
+    for i, u in enumerate(users):
+        if u.id == user_id:
+            if "role" in body and body["role"] in ("admin", "operator", "viewer"):
+                users[i] = u.model_copy(update={"role": body["role"]})
+            if "enabled" in body:
+                users[i] = users[i].model_copy(update={"enabled": bool(body["enabled"])})
+            if "password" in body and body["password"]:
+                users[i] = users[i].model_copy(update={"hashed_password": hash_password(body["password"])})
+            config_manager.config.users = users
+            config_manager.save()
+            u2 = users[i]
+            return {"id": u2.id, "username": u2.username, "role": u2.role, "enabled": u2.enabled}
+    return JSONResponse({"error": "User not found"}, status_code=404)
+
+
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str, payload: dict = Depends(require_admin)):
+    users = list(getattr(config_manager.config, "users", []))
+    before = len(users)
+    users = [u for u in users if u.id != user_id]
+    if len(users) == before:
+        return JSONResponse({"error": "User not found"}, status_code=404)
+    config_manager.config.users = users
+    config_manager.save()
+    return {"status": "deleted"}
+
+
+# ═══════════════════════════════════════════════
 # REST API — Schedules
 # ═══════════════════════════════════════════════
 @app.get("/api/schedules")
@@ -820,6 +1023,116 @@ async def delete_schedule(sched_id: str):
     if not removed:
         return JSONResponse({"error": "Schedule not found"}, status_code=404)
     return {"status": "deleted"}
+
+
+@app.get("/api/schedules/status")
+async def get_schedule_status():
+    """Return last run status for all schedules."""
+    if not scheduler_service:
+        return {"status": {}}
+    return {"status": scheduler_service.get_last_run_status()}
+
+
+@app.post("/api/schedules/{sched_id}/run")
+async def run_schedule_now(sched_id: str):
+    """Manually trigger a schedule immediately."""
+    if not scheduler_service:
+        return JSONResponse({"error": "Scheduler not initialised"}, status_code=503)
+    result = await scheduler_service.run_now(sched_id)
+    return result
+
+
+# ═══════════════════════════════════════════════
+# REST API — Data Export
+# ═══════════════════════════════════════════════
+import csv
+import io
+
+@app.get("/api/export/history.csv")
+async def export_history_csv(
+    from_ts: str = "",
+    to_ts: str = "",
+    mapping_id: str = "",  # comma-separated IDs; empty = all
+):
+    """Export point_history as CSV stream. Params: from_ts, to_ts (ISO), mapping_id."""
+    if not history_store:
+        return JSONResponse({"error": "History store not available"}, status_code=503)
+
+    query = "SELECT mapping_id, value, value_text, timestamp FROM point_history WHERE 1=1"
+    params: list = []
+    if from_ts:
+        query += " AND timestamp >= ?"; params.append(from_ts)
+    if to_ts:
+        query += " AND timestamp <= ?"; params.append(to_ts)
+    if mapping_id:
+        ids = [x.strip() for x in mapping_id.split(",") if x.strip()]
+        placeholders = ",".join("?" * len(ids))
+        query += f" AND mapping_id IN ({placeholders})"; params.extend(ids)
+    query += " ORDER BY timestamp ASC LIMIT 200000"
+
+    rows = history_store._conn.execute(query, params).fetchall()
+
+    # Build mapping label lookup
+    label_map = {m.id: (m.label or f"{m.object_type}:{m.object_instance}") for m in config_manager.mappings}
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["timestamp", "mapping_id", "label", "value", "value_text"])
+    for mapping_id_row, value, value_text, timestamp in rows:
+        writer.writerow([timestamp, mapping_id_row, label_map.get(mapping_id_row, ""), value, value_text])
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=point_history.csv"},
+    )
+
+
+@app.get("/api/export/events.csv")
+async def export_events_csv(from_ts: str = "", to_ts: str = "", event_type: str = ""):
+    """Export event_log as CSV."""
+    if not history_store:
+        return JSONResponse({"error": "History store not available"}, status_code=503)
+
+    query = "SELECT timestamp, event_type, device_id, mapping_id, severity, message FROM event_log WHERE 1=1"
+    params: list = []
+    if from_ts:
+        query += " AND timestamp >= ?"; params.append(from_ts)
+    if to_ts:
+        query += " AND timestamp <= ?"; params.append(to_ts)
+    if event_type:
+        query += " AND event_type = ?"; params.append(event_type)
+    query += " ORDER BY timestamp ASC LIMIT 50000"
+
+    rows = history_store._conn.execute(query, params).fetchall()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["timestamp", "event_type", "device_id", "mapping_id", "severity", "message"])
+    writer.writerows(rows)
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=event_log.csv"},
+    )
+
+
+@app.get("/api/export/summary")
+async def export_summary():
+    """Return date range and counts for the export UI."""
+    if not history_store:
+        return {"history_count": 0, "event_count": 0, "oldest": None, "newest": None}
+
+    c = history_store._conn
+    h = c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM point_history").fetchone()
+    e = c.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM event_log").fetchone()
+    return {
+        "history_count": h[0], "history_oldest": h[1], "history_newest": h[2],
+        "event_count": e[0], "event_oldest": e[1], "event_newest": e[2],
+    }
 
 
 # ═══════════════════════════════════════════════
@@ -1118,6 +1431,50 @@ async def get_history(mapping_id: str, start: str = None, end: str = None, limit
         return JSONResponse({"error": "History store not initialised"}, status_code=503)
     data = history_store.query(mapping_id, start=start, end=end, limit=min(limit, 5000))
     return {"mapping_id": mapping_id, "count": len(data), "records": data}
+
+
+@app.get("/api/history/multi")
+async def get_multi_history(
+    ids: str = "",           # comma-separated mapping IDs; empty = all
+    start: str | None = None,
+    end: str | None = None,
+    limit: int = 2000,
+):
+    """Fetch history for multiple mapping IDs in one request.
+    Returns: { series: { mapping_id: [{timestamp, value}] }, label_map: {id: label} }
+    Used by the Trending page to avoid N parallel individual requests.
+    """
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+
+    mapping_ids = [x.strip() for x in ids.split(",") if x.strip()] if ids else None
+    rows = history_store.export_range(
+        mapping_ids=mapping_ids,
+        start=start,
+        end=end,
+        limit=min(limit, 10_000),
+    )
+
+    # Group by mapping_id → {id: [{timestamp, value}]}
+    series: dict[str, list] = {}
+    for row in rows:
+        mid = row["mapping_id"]
+        if mid not in series:
+            series[mid] = []
+        series[mid].append({"timestamp": row["timestamp"], "value": row["value"]})
+
+    # Build label map for display
+    label_map = {
+        m.id: (m.label or f"{m.object_type}:{m.object_instance}")
+        for m in config_manager.mappings
+    }
+
+    return {
+        "series": series,
+        "label_map": label_map,
+        "total_rows": len(rows),
+        "mapping_count": len(series),
+    }
 
 
 # ═══════════════════════════════════════════════

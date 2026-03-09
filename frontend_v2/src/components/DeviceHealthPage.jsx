@@ -1,5 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, Search, Wifi, WifiOff, Activity, X, Circle } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import {
+  RefreshCw, Search, Wifi, WifiOff, Activity, X,
+  LayoutGrid, Network, ChevronDown, ChevronRight
+} from 'lucide-react';
 
 const API = '/api';
 
@@ -12,218 +15,308 @@ function timeSince(iso) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
+function parseAddress(addr) {
+  if (!addr) return { network: 'Unknown', node: '', type: 'unknown', netKey: 'zzz_unknown' };
+  if (addr.includes('.')) return { network: 'IP/Ethernet', node: addr, type: 'ip', netKey: '000_ip' };
+  if (addr.includes(':')) {
+    const [net, node] = addr.split(':');
+    return { network: `Net ${net}`, node, type: 'mstp', netKey: `${net.padStart(8,'0')}_mstp`, netId: net };
+  }
+  return { network: 'Unknown', node: addr, type: 'unknown', netKey: 'zzz_unknown' };
+}
+
+const NET_PALETTE = [
+  '#6366f1','#8b5cf6','#0ea5e9','#14b8a6','#f59e0b',
+  '#ef4444','#ec4899','#22c55e','#f97316','#06b6d4',
+  '#a78bfa','#fb923c','#34d399','#60a5fa','#f472b6',
+];
+const _colorMap = {};
+let _colorIdx = 0;
+function netColor(key) {
+  if (!_colorMap[key]) _colorMap[key] = NET_PALETTE[_colorIdx++ % NET_PALETTE.length];
+  return _colorMap[key];
+}
+
+function StatusDot({ online, size = 'sm' }) {
+  const px = size === 'sm' ? 'w-2.5 h-2.5' : 'w-3.5 h-3.5';
+  if (online === true)  return <div className={`${px} rounded-full bg-success shadow-[0_0_5px_rgba(0,255,136,0.5)] animate-pulse`} />;
+  if (online === false) return <div className={`${px} rounded-full bg-error   shadow-[0_0_5px_rgba(255,60,60,0.5)]`} />;
+  return <div className={`${px} rounded-full bg-warning/60`} />;
+}
+
 function DeviceTile({ device, onClick }) {
-  const online = device.online;
-  const failPct = Math.min((device.fail_count || 0) / 5, 1);
-
+  const border = device.online === true
+    ? 'border-success/25 bg-success/5 hover:border-success/60'
+    : device.online === false
+    ? 'border-error/25 bg-error/5 hover:border-error/60'
+    : 'border-border/30 bg-bg-input/30 hover:border-border-focus';
   return (
-    <div
-      onClick={() => onClick(device)}
-      className={`relative group cursor-pointer rounded-xl border p-3 flex flex-col gap-1 transition-all hover:-translate-y-0.5 hover:shadow-lg ${
-        online
-          ? 'bg-success/5 border-success/20 hover:border-success/50'
-          : 'bg-error/5 border-error/20 hover:border-error/50'
-      }`}
-    >
-      {/* Status dot */}
-      <div className={`absolute top-2 right-2 w-2.5 h-2.5 rounded-full ${online ? 'bg-success shadow-[0_0_6px_rgba(0,255,136,0.6)]' : 'bg-error shadow-[0_0_6px_rgba(255,60,60,0.6)]'} ${online ? 'animate-pulse' : ''}`} />
-
-      {/* Device ID */}
-      <div className={`text-xs font-bold tabular-nums ${online ? 'text-success' : 'text-error'}`}>
+    <div onClick={() => onClick(device)}
+      className={`relative cursor-pointer rounded-xl border p-3 flex flex-col gap-1 transition-all hover:-translate-y-0.5 hover:shadow-md ${border}`}>
+      <div className="absolute top-2 right-2"><StatusDot online={device.online} /></div>
+      <div className={`text-xs font-bold tabular-nums ${device.online === true ? 'text-success' : device.online === false ? 'text-error' : 'text-warning'}`}>
         #{device.device_id}
       </div>
-
-      {/* Name */}
-      <div className="text-[11px] text-white font-medium truncate leading-tight" title={device.name}>
-        {device.name || `Device ${device.device_id}`}
-      </div>
-
-      {/* Address */}
-      <div className="text-[10px] text-text-muted truncate">{device.address || '—'}</div>
-
-      {/* Stats bar */}
-      <div className="flex items-center gap-2 mt-1">
+      <div className="text-[11px] text-white font-medium truncate pr-3" title={device.name}>{device.name || `Device ${device.device_id}`}</div>
+      <div className="text-[10px] text-text-muted">{device.address || '—'}</div>
+      <div className="flex items-center gap-2 mt-0.5">
         <span className="text-[10px] text-text-muted">{device.point_count || 0} pts</span>
-        {!online && device.fail_count > 0 && (
-          <span className="text-[10px] text-error">✕{device.fail_count}</span>
-        )}
-        {device.last_seen && (
-          <span className="text-[10px] text-text-muted ml-auto">{timeSince(device.last_seen)}</span>
-        )}
+        {device.online === false && device.fail_count > 0 && <span className="text-[10px] text-error">✕{device.fail_count}</span>}
+        {device.last_seen && <span className="text-[10px] text-text-muted ml-auto">{timeSince(device.last_seen)}</span>}
       </div>
+    </div>
+  );
+}
 
-      {/* Fail indicator bar */}
-      {!online && failPct > 0 && (
-        <div className="h-0.5 w-full bg-bg-input rounded-full overflow-hidden mt-1">
-          <div className="h-full bg-error rounded-full" style={{ width: `${failPct * 100}%` }} />
+function DeviceModal({ device, onClose }) {
+  if (!device) return null;
+  const p = parseAddress(device.address);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <StatusDot online={device.online} size="lg" />
+            <h3 className="font-bold text-white">Device #{device.device_id}</h3>
+          </div>
+          <button onClick={onClose} className="p-1 rounded-lg hover:bg-bg-input text-text-muted hover:text-white"><X size={16}/></button>
+        </div>
+        <div className="p-6 grid grid-cols-2 gap-3">
+          {[['Name',device.name||'—'],['Network',p.network],['Address',device.address||'—'],['Node',p.node||'—'],
+            ['Status',device.online===true?'Online':device.online===false?'Offline':'Pending'],
+            ['Points',`${device.point_count||0} mapped`],['Fail Count',device.fail_count||0],['Last Seen',timeSince(device.last_seen)]]
+            .map(([k,v])=>(
+              <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
+                <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
+                <div className="text-sm font-medium text-white truncate">{String(v)}</div>
+              </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   Network Accordion Card
+══════════════════════════════════════════════════════ */
+function NetworkCard({ networkName, devices, color, defaultOpen, onTileClick }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const online  = devices.filter(d => d.online === true).length;
+  const offline = devices.filter(d => d.online === false).length;
+  const pending = devices.filter(d => d.online === null || d.online === undefined).length;
+  const pct = devices.length > 0 ? (online / devices.length) * 100 : 0;
+
+  return (
+    <div className="rounded-2xl border border-border/50 overflow-hidden bg-bg-secondary/40 backdrop-blur-sm"
+      style={{ borderLeftColor: color, borderLeftWidth: 3 }}>
+      {/* ── Header / toggler ── */}
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-bg-input/30 transition-colors text-left"
+        onClick={() => setOpen(o => !o)}>
+        {/* expand icon */}
+        <div style={{ color }} className="flex-shrink-0">
+          {open ? <ChevronDown size={16}/> : <ChevronRight size={16}/>}
+        </div>
+
+        {/* Network name */}
+        <span className="font-bold text-sm text-white min-w-[80px]">{networkName}</span>
+
+        {/* Progress bar */}
+        <div className="flex-1 h-1.5 bg-bg-input rounded-full overflow-hidden mx-2 hidden sm:block">
+          <div className="h-full rounded-full transition-all duration-500"
+            style={{ width: `${pct}%`, backgroundColor: pct > 80 ? '#22c55e' : pct > 40 ? '#f59e0b' : '#ef4444' }} />
+        </div>
+
+        {/* Stats */}
+        <div className="flex items-center gap-3 text-xs flex-shrink-0">
+          <span className="font-bold text-white tabular-nums">{devices.length}</span>
+          <span className="text-text-muted">devices</span>
+          {online  > 0 && <span className="text-success font-semibold">● {online} online</span>}
+          {offline > 0 && <span className="text-error   font-semibold">● {offline} off</span>}
+          {pending > 0 && <span className="text-warning/70 text-[11px]">⏳ {pending}</span>}
+          {/* % badge */}
+          <span className="hidden sm:block px-1.5 py-0.5 rounded-md text-[10px] font-mono"
+            style={{ background: `${color}22`, color }}>
+            {pct.toFixed(0)}%
+          </span>
+        </div>
+      </button>
+
+      {/* ── Expanded device tiles ── */}
+      {open && (
+        <div className="px-4 pb-4 pt-2 border-t border-border/30">
+          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))' }}>
+            {devices.map(d => <DeviceTile key={d.device_id} device={d} onClick={onTileClick}/>)}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-function DeviceDetailModal({ device, onClose }) {
-  if (!device) return null;
-  const online = device.online;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-bg-secondary border border-border rounded-2xl shadow-2xl w-full max-w-md mx-4">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className={`w-3 h-3 rounded-full ${online ? 'bg-success' : 'bg-error'}`} />
-            <h3 className="text-base font-bold text-white">Device #{device.device_id}</h3>
-          </div>
-          <button onClick={onClose} className="p-1 rounded-lg hover:bg-bg-input text-text-muted hover:text-white"><X size={18} /></button>
-        </div>
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              ['Status', online ? '🟢 Online' : '🔴 Offline'],
-              ['Name', device.name || '—'],
-              ['Address', device.address || '—'],
-              ['Points', `${device.point_count || 0} mapped`],
-              ['Fail Count', device.fail_count || 0],
-              ['Last Seen', timeSince(device.last_seen)],
-            ].map(([k, v]) => (
-              <div key={k} className="bg-bg-input/40 rounded-lg p-3 border border-border/30">
-                <div className="text-[10px] text-text-muted uppercase tracking-wider mb-1">{k}</div>
-                <div className="text-sm font-medium text-white">{v}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
+/* ══════════════════════════════════════════════════════════
+   Main Page
+══════════════════════════════════════════════════════════ */
 export function DeviceHealthPage() {
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('ALL'); // ALL | ONLINE | OFFLINE
+  const [search,  setSearch]  = useState('');
+  const [filter,  setFilter]  = useState('ALL');
+  const [view,    setView]    = useState('network'); // 'grid' | 'network'
   const [selected, setSelected] = useState(null);
-  const intervalRef = useRef(null);
+  const timerRef = useRef(null);
 
   const fetchHealth = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/devices/health`);
-      if (!res.ok) throw new Error(res.statusText);
-      const data = await res.json();
-      setDevices(data.devices || []);
-    } catch (e) {
-      console.error('Health fetch error:', e);
-    } finally {
-      setLoading(false);
-    }
+      const r = await fetch(`${API}/devices/health`);
+      if (!r.ok) throw new Error(r.statusText);
+      const d = await r.json();
+      setDevices(d.devices || []);
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
     fetchHealth();
-    intervalRef.current = setInterval(fetchHealth, 30000); // Auto-refresh every 30s
-    return () => clearInterval(intervalRef.current);
+    timerRef.current = setInterval(fetchHealth, 30000);
+    return () => clearInterval(timerRef.current);
   }, [fetchHealth]);
 
-  const onlineCount = devices.filter(d => d.online).length;
-  const offlineCount = devices.length - onlineCount;
+  const onlineCount  = devices.filter(d => d.online === true).length;
+  const offlineCount = devices.filter(d => d.online === false).length;
+  const pendingCount = devices.filter(d => d.online !== true && d.online !== false).length;
 
-  const filtered = devices.filter(d => {
-    if (filter === 'ONLINE' && !d.online) return false;
-    if (filter === 'OFFLINE' && d.online) return false;
+  const filtered = useMemo(() => devices.filter(d => {
+    if (filter === 'ONLINE'  && d.online !== true)  return false;
+    if (filter === 'OFFLINE' && d.online !== false) return false;
     if (search) {
       const q = search.toLowerCase();
-      if (!String(d.device_id).includes(q) && !(d.name || '').toLowerCase().includes(q) && !(d.address || '').includes(q)) return false;
+      if (!String(d.device_id).includes(q) &&
+          !(d.name||'').toLowerCase().includes(q) &&
+          !(d.address||'').includes(q)) return false;
     }
     return true;
-  });
+  }), [devices, filter, search]);
+
+  const byNetwork = useMemo(() => {
+    const g = {};
+    for (const d of filtered) {
+      const { network, netKey } = parseAddress(d.address);
+      if (!g[netKey]) g[netKey] = { networkName: network, devices: [] };
+      g[netKey].devices.push(d);
+    }
+    return Object.entries(g)
+      .sort(([a],[b]) => a.localeCompare(b))
+      .map(([key, val]) => ({ key, color: netColor(key), ...val }));
+  }, [filtered]);
+
+  // Auto-expand top 3 networks by default
+  const topNets = useMemo(() => new Set(byNetwork.slice(0,3).map(n=>n.key)), [byNetwork]);
 
   return (
-    <div className="p-6 flex flex-col h-screen">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-5">
+    <div className="flex flex-col h-screen p-6">
+      {/* Title */}
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <Activity size={24} className="text-accent-primary" /> Device Health
+          <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+            <Activity size={22} className="text-accent-primary"/> Device Health
           </h2>
-          <p className="text-xs text-text-muted mt-1">
-            {devices.length} devices total •
+          <p className="text-xs text-text-muted mt-0.5">
+            {devices.length} total •
             <span className="text-success ml-1">{onlineCount} online</span> •
             <span className="text-error ml-1">{offlineCount} offline</span>
+            {pendingCount > 0 && <span className="text-warning ml-1">• {pendingCount} pending</span>}
           </p>
         </div>
-        <button onClick={fetchHealth} disabled={loading}
-          className="flex items-center gap-2 px-3 py-2 bg-bg-input border border-border rounded-lg text-text-secondary hover:text-white hover:border-accent-primary text-sm transition-all disabled:opacity-50">
-          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="flex bg-bg-input border border-border rounded-lg overflow-hidden text-xs">
+            {[['grid','Grid',<LayoutGrid size={12}/>],['network','By Network',<Network size={12}/>]].map(([v,l,ic])=>(
+              <button key={v} onClick={()=>setView(v)}
+                className={`px-3 py-2 flex items-center gap-1.5 border-r last:border-r-0 border-border transition-all ${view===v?'bg-accent-primary/20 text-accent-primary':'text-text-secondary hover:text-white'}`}>
+                {ic}{l}
+              </button>
+            ))}
+          </div>
+          <button onClick={fetchHealth} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-2 bg-bg-input border border-border rounded-lg text-text-secondary hover:text-white text-xs transition-all disabled:opacity-50">
+            <RefreshCw size={13} className={loading?'animate-spin':''}/> Refresh
+          </button>
+        </div>
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        <div className="glass-card p-4">
-          <div className="text-[10px] uppercase tracking-widest text-text-muted mb-1">Total Devices</div>
-          <div className="text-2xl font-bold text-white">{devices.length}</div>
-        </div>
-        <div className="glass-card p-4 border-success/20">
-          <div className="text-[10px] uppercase tracking-widest text-success/70 mb-1">Online</div>
-          <div className="text-2xl font-bold text-success">{onlineCount}</div>
-          <div className="text-xs text-text-muted mt-1">{devices.length > 0 ? ((onlineCount / devices.length) * 100).toFixed(1) : 0}% availability</div>
-        </div>
-        <div className="glass-card p-4 border-error/20">
-          <div className="text-[10px] uppercase tracking-widest text-error/70 mb-1">Offline</div>
-          <div className="text-2xl font-bold text-error">{offlineCount}</div>
-          {offlineCount > 0 && (
-            <div className="text-xs text-error/60 mt-1 flex items-center gap-1"><WifiOff size={10} /> Needs attention</div>
-          )}
-        </div>
+      <div className="grid grid-cols-4 gap-3 mb-4">
+        {[
+          { label:'Total',    val: devices.length, cls:'text-white' },
+          { label:'Online',   val: onlineCount,    cls:'text-success', sub:`${devices.length>0?((onlineCount/devices.length)*100).toFixed(1):0}%` },
+          { label:'Offline',  val: offlineCount,   cls:'text-error',   sub: offlineCount>0?'Needs attention':undefined },
+          { label:'Networks', val: byNetwork.length,cls:'text-warning', sub:'MSTP / IP lines' },
+        ].map(({label,val,cls,sub})=>(
+          <div key={label} className="glass-card p-4">
+            <div className="text-[10px] uppercase tracking-widest text-text-muted mb-1">{label}</div>
+            <div className={`text-2xl font-bold ${cls}`}>{val}</div>
+            {sub && <div className={`text-xs mt-1 ${cls} opacity-60`}>{sub}</div>}
+          </div>
+        ))}
       </div>
 
       {/* Filter + Search */}
-      <div className="flex items-center gap-3 mb-4 flex-wrap">
+      <div className="flex items-center gap-3 mb-4">
         <div className="flex gap-1">
-          {['ALL', 'ONLINE', 'OFFLINE'].map(f => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                filter === f
-                  ? f === 'ONLINE' ? 'bg-success/20 text-success border border-success/40'
-                    : f === 'OFFLINE' ? 'bg-error/20 text-error border border-error/40'
-                    : 'bg-accent-primary/20 text-accent-primary border border-accent-primary/40'
-                  : 'bg-bg-input border border-border text-text-secondary hover:text-white'
-              }`}>
-              {f === 'ALL' ? `All (${devices.length})` : f === 'ONLINE' ? `🟢 Online (${onlineCount})` : `🔴 Offline (${offlineCount})`}
-            </button>
+          {[['ALL',`All (${devices.length})`],['ONLINE',`🟢 (${onlineCount})`],['OFFLINE',`🔴 (${offlineCount})`]].map(([f,l])=>(
+            <button key={f} onClick={()=>setFilter(f)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all border ${
+                filter===f
+                  ? f==='ONLINE'  ? 'bg-success/20 text-success border-success/40'
+                  : f==='OFFLINE' ? 'bg-error/20 text-error border-error/40'
+                  : 'bg-accent-primary/20 text-accent-primary border-accent-primary/40'
+                  : 'bg-bg-input border-border text-text-secondary hover:text-white'
+              }`}>{l}</button>
           ))}
         </div>
-        <div className="relative flex-1 max-w-sm">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-          <input type="text" placeholder="Search by ID, name, or address…"
-            value={search} onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-bg-input border border-border rounded-lg text-xs text-white placeholder:text-text-muted focus:outline-none focus:border-border-focus transition-all" />
+        <div className="relative flex-1 max-w-xs">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search ID, name, address…"
+            className="w-full pl-8 pr-3 py-2 bg-bg-input border border-border rounded-lg text-xs text-white placeholder:text-text-muted focus:outline-none focus:border-border-focus"/>
         </div>
         {search && <span className="text-xs text-text-muted">{filtered.length} results</span>}
       </div>
 
-      {/* Device Grid */}
+      {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-text-muted">
-            <Wifi size={40} className="mb-3 opacity-30" />
+          <div className="flex flex-col items-center justify-center h-40 text-text-muted">
+            <Wifi size={36} className="mb-3 opacity-20"/>
             <p className="text-sm">No devices found</p>
-            <p className="text-xs mt-1">Start the gateway and run discovery first</p>
+          </div>
+        ) : view === 'grid' ? (
+          /* ── Flat grid ── */
+          <div className="grid gap-2" style={{gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))'}}>
+            {filtered.map(d=><DeviceTile key={d.device_id} device={d} onClick={setSelected}/>)}
           </div>
         ) : (
-          <div className="grid gap-2" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))' }}>
-            {filtered.map(d => (
-              <DeviceTile key={d.device_id} device={d} onClick={setSelected} />
+          /* ── Network accordion cards ── */
+          <div className="space-y-2">
+            {byNetwork.map(({ key, networkName, devices: devs, color }) => (
+              <NetworkCard
+                key={key}
+                networkName={networkName}
+                devices={devs}
+                color={color}
+                defaultOpen={topNets.has(key)}
+                onTileClick={setSelected}
+              />
             ))}
           </div>
         )}
       </div>
 
-      {/* Detail Modal */}
-      {selected && <DeviceDetailModal device={selected} onClose={() => setSelected(null)} />}
+      {selected && <DeviceModal device={selected} onClose={()=>setSelected(null)}/>}
     </div>
   );
 }

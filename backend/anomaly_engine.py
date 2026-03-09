@@ -37,9 +37,9 @@ class AnomalyRule:
     name: str
     trigger_mapping_id: str       # Point that triggers the check
     trigger_condition: str        # e.g. "gt:26.0", "eq:active", "ne:0"
-    expected_mapping_id: str      # Point that should respond
-    expected_value: Any           # Expected value (str/float)
-    tolerance_seconds: int = 120  # Grace period before declaring alarm
+    expected_mapping_id: str = "" # Point that should respond (optional)
+    expected_value: Any = ""      # Expected value (str/float, optional)
+    tolerance_seconds: int = 0    # Grace period; 0 = alarm immediately
     severity: str = "warning"     # "warning" | "critical"
     enabled: bool = True
     notify_topic: str = ""        # MQTT topic for alert (optional)
@@ -166,6 +166,10 @@ class AnomalyEngine:
         """
         Called by GatewayEngine after each successful poll.
         Evaluates all rules that reference this mapping_id.
+
+        Two modes:
+          1. With response point: TRIGGER → wait tolerance → check expected_mapping_id → ALARM
+          2. Alarm-only (no response point): TRIGGER → wait tolerance → ALARM immediately
         """
         self._latest[mapping_id] = value
 
@@ -173,6 +177,7 @@ class AnomalyEngine:
             if not rule.enabled:
                 continue
             state = self._states.setdefault(rule.id, RuleState())
+            alarm_only = not rule.expected_mapping_id  # no response point = simple alarm
 
             # ─ This point is the TRIGGER
             if rule.trigger_mapping_id == mapping_id:
@@ -181,6 +186,13 @@ class AnomalyEngine:
                     state.status = "TRIGGERED"
                     state.triggered_at = time.monotonic()
                     logger.debug(f"[Anomaly] Rule '{rule.name}' TRIGGERED by {mapping_id}={value}")
+                    # Alarm-only with no grace period → fire immediately
+                    if alarm_only and rule.tolerance_seconds == 0:
+                        state.status = "ALARM"
+                        state.last_alarm_at = time.monotonic()
+                        state.alarm_count += 1
+                        logger.warning(f"[Anomaly] ALARM (immediate) rule='{rule.name}' trigger={value}")
+                        await self._fire_alarm(rule, value)
                 elif not triggered and state.status not in ("IDLE",):
                     # Trigger cleared → reset
                     if state.status == "ALARM":
@@ -189,8 +201,9 @@ class AnomalyEngine:
                     state.status = "IDLE"
                     state.triggered_at = None
 
-            # ─ This point is the EXPECTED RESPONSE
-            if rule.expected_mapping_id == mapping_id and state.status in ("TRIGGERED", "ALARM"):
+            # ─ This point is the EXPECTED RESPONSE (only for rules with response point)
+            if (not alarm_only and rule.expected_mapping_id == mapping_id
+                    and state.status in ("TRIGGERED", "ALARM")):
                 if _values_match(value, rule.expected_value):
                     logger.info(f"[Anomaly] Rule '{rule.name}' RESOLVED — expected response received")
                     if state.status == "ALARM":
@@ -202,13 +215,23 @@ class AnomalyEngine:
             if state.status == "TRIGGERED" and state.triggered_at is not None:
                 elapsed = time.monotonic() - state.triggered_at
                 if elapsed >= rule.tolerance_seconds:
-                    actual = self._latest.get(rule.expected_mapping_id)
-                    if not _values_match(actual, rule.expected_value):
+                    if alarm_only:
+                        # No response point: alarm after grace period
+                        actual = self._latest.get(rule.trigger_mapping_id)
                         state.status = "ALARM"
                         state.last_alarm_at = time.monotonic()
                         state.alarm_count += 1
-                        logger.warning(f"[Anomaly] ALARM rule='{rule.name}' expected={rule.expected_value} actual={actual}")
+                        logger.warning(f"[Anomaly] ALARM rule='{rule.name}' trigger_value={actual}")
                         await self._fire_alarm(rule, actual)
+                    else:
+                        # With response point: alarm if expected response not seen
+                        actual = self._latest.get(rule.expected_mapping_id)
+                        if not _values_match(actual, rule.expected_value):
+                            state.status = "ALARM"
+                            state.last_alarm_at = time.monotonic()
+                            state.alarm_count += 1
+                            logger.warning(f"[Anomaly] ALARM rule='{rule.name}' expected={rule.expected_value} actual={actual}")
+                            await self._fire_alarm(rule, actual)
 
     async def _fire_alarm(self, rule: AnomalyRule, actual_value: Any):
         """Log event and publish MQTT alert."""
