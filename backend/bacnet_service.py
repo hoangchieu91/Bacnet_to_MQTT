@@ -278,25 +278,54 @@ class BacnetService:
         return devices
 
     async def read_device_name(self, device_id: int) -> str:
-        """Read a single device's objectName on-demand. Caches the result."""
+        """Read a single device's objectName on-demand. Caches the result.
+
+        Fallback chain:
+          1. _device_names cache (fastest)
+          2. _devices dict (populated by discover_devices scan)
+          3. _network.discoveredDevices (BAC0 internal – populated by I-Am responses)
+        """
         if device_id in self._device_names:
             return self._device_names[device_id]
 
+        if not self._connected or self._network is None:
+            return f"Device {device_id}"
+
+        # Resolve address: try _devices first, then BAC0's internal dict
+        address: str | None = None
         device = self._devices.get(device_id)
-        if not device or not self._connected:
+        if device:
+            address = device.address
+        else:
+            # Fallback: search BAC0's discoveredDevices (keyed by address object)
+            try:
+                for addr_key, dev_obj in self._network.discoveredDevices.items():
+                    # BAC0 stores devices as {address: device} where device has .device_id
+                    dev_inst = getattr(dev_obj, "deviceInstanceRangeHighLimit", None)
+                    if dev_inst is None:
+                        # Try alternate attribute names
+                        dev_inst = getattr(dev_obj, "instance", None)
+                    if dev_inst == device_id:
+                        address = str(addr_key)
+                        break
+            except Exception:
+                pass
+
+        if not address:
             return f"Device {device_id}"
 
         try:
             name = await self._network.read(
-                f"{device.address} device {device_id} objectName"
+                f"{address} device {device_id} objectName"
             )
             if name:
-                name_str = str(name)
+                name_str = str(name).strip()
                 self._device_names[device_id] = name_str
-                device.device_name = name_str
+                if device:
+                    device.device_name = name_str
                 return name_str
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("[read_device_name] device %d addr %s: %s", device_id, address, exc)
         return f"Device {device_id}"
 
     async def read_device_names_batch(self, device_ids: list[int]) -> dict[int, str]:

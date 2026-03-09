@@ -54,6 +54,7 @@ class BacnetConfig(BaseModel):
     mask: str = "24"
     device_id: int = 599
     default_poll_interval: int = 10
+    bms_server_ip: str = ""   # BMS server to passively monitor WHO-IS / WHO-HAS from
 
 
 # ──────────────────────────────────────────────

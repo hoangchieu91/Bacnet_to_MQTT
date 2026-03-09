@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.bacnet_service import BacnetService
+from backend.bacnet_listener import BACnetPassiveListener
 from backend.config_manager import ConfigManager
 from backend.models import GatewayStatus, PointMapping
 from backend.mqtt_service import MqttService
@@ -58,11 +59,20 @@ class GatewayEngine:
         self._device_status: dict[int, dict] = {}
 
         # Pinging: known devices loaded from persistence (survive restart)
-        # { device_id: {address, name} }
+        # { device_id: {address, name, source} }
         self._known_devices: dict[int, dict] = {}
         self._ping_task: asyncio.Task[None] | None = None
         self._devices_file = Path(__file__).resolve().parent.parent / "config" / "discovered_devices.json"
         self._load_known_devices()
+
+        # Passive BACnet listener (sniff WHO-IS / WHO-HAS from BMS server)
+        bms_ip = getattr(config_manager.config.bacnet, "bms_server_ip", None) or ""
+        self._listener: BACnetPassiveListener | None = None
+        if bms_ip:
+            self._listener = BACnetPassiveListener(
+                server_ip=bms_ip,
+                on_devices_found=self._on_server_queried_devices,
+            )
 
         # BACnet read serializer — prevents concurrent reads saturating BAC0 queue
         # Critical for MSTP networks where only one request can be in-flight
@@ -96,7 +106,102 @@ class GatewayEngine:
 
         self._polling_task = asyncio.create_task(self._polling_loop())
         self._ping_task = asyncio.create_task(self._device_ping_loop())
+        if self._listener:
+            await self._listener.start()
+        # Kick off name resolution for all known devices that still have generic names.
+        # Waits 60s for BAC0 to finish its initial WHO-IS scan before reading.
+        asyncio.create_task(self._scheduled_name_resolve(delay_s=60))
         logger.info("Gateway engine started. Listening on %s/cmd/#", prefix)
+
+    async def _scheduled_name_resolve(self, delay_s: int = 60) -> None:
+        """Wait for BACnet to stabilise then bulk-fetch device names via BAC0 list() API.
+
+        BAC0 list() calls readMultiple(objectName vendorName) for every device in
+        discoveredDevices and correctly handles NoResponse by skipping unresponsive ones.
+        """
+        await asyncio.sleep(delay_s)
+        if not self._running:
+            return
+
+        try:
+            logger.info("[Names] Calling BAC0 list() to bulk-fetch device names...")
+            device_list = await self._bacnet._network.list()
+            if not device_list:
+                logger.warning("[Names] BAC0 list() returned empty")
+                return
+            logger.info("[Names] list() returned %d entries", len(device_list))
+            updated = 0
+            for item in device_list:
+                try:
+                    # BAC0 list() returns (name, vendor, instance, address, network_number)
+                    name_str = str(item[0]).strip()
+                    did = int(item[2])
+                    if not name_str or name_str.startswith("Device "):
+                        continue
+                    entry = self._known_devices.get(did)
+                    if entry and (not entry.get("name") or entry["name"] == f"Device {did}"):
+                        entry["name"] = name_str
+                        self._bacnet._device_names[did] = name_str
+                        updated += 1
+                        logger.info("[Names] #%d -> %s", did, name_str)
+                except (IndexError, ValueError, TypeError):
+                    continue
+            self._save_known_devices()
+            logger.info("[Names] Done -- updated %d names from list()", updated)
+        except Exception as exc:
+            logger.warning("[Names] list() failed: %s: %s - falling back to per-device", type(exc).__name__, exc)
+            # Fallback: per-device read from discoveredDevices
+            bac_devices = getattr(self._bacnet._network, "discoveredDevices", None) or {}
+            to_resolve = []
+            for _key, v in bac_devices.items():
+                try:
+                    obj_type, did = v["object_instance"]
+                    address = str(v["address"])
+                    entry = self._known_devices.get(did)
+                    if entry and (not entry.get("name") or entry["name"] == f"Device {did}"):
+                        to_resolve.append((int(did), address, str(obj_type)))
+                except (KeyError, TypeError, ValueError):
+                    continue
+            if to_resolve:
+                await self._resolve_names_with_addresses(to_resolve)
+
+    async def _resolve_names_with_addresses(
+        self, devices: list[tuple[int, str, str]]
+    ) -> None:
+        """Fallback: read objectName per-device using (device_id, address, obj_type)."""
+        resolved = 0
+        failed = 0
+        batch = 0
+        for did, address, obj_type in devices:
+            if not self._running:
+                break
+            entry = self._known_devices.get(did)
+            if not entry or (entry.get("name") and entry["name"] != f"Device {did}"):
+                continue
+            try:
+                result = await self._bacnet._network.read(
+                    f"{address} {obj_type} {did} objectName",
+                    timeout=5,
+                )
+                if result:
+                    name_str = str(result).strip()
+                    if name_str and name_str != f"Device {did}":
+                        entry["name"] = name_str
+                        self._bacnet._device_names[did] = name_str
+                        resolved += 1
+                        batch += 1
+                        logger.info("[Names] #%d -> %s", did, name_str)
+                        if batch >= 20:
+                            self._save_known_devices()
+                            batch = 0
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning("[Names] #%d (%s %s): %s: %s", did, obj_type, address, type(exc).__name__, exc)
+            await asyncio.sleep(0.5)
+        self._save_known_devices()
+        logger.info("[Names] Done -- resolved: %d, failed: %d / %d", resolved, failed, len(devices))
 
     async def stop(self) -> None:
         """Stop the polling loop."""
@@ -108,6 +213,8 @@ class GatewayEngine:
                     await task
                 except asyncio.CancelledError:
                     pass
+        if self._listener:
+            await self._listener.stop()
         self._status = GatewayStatus.STOPPED
         self._start_time = None
         self._loop = None
@@ -565,26 +672,137 @@ class GatewayEngine:
             logger.warning("Could not save known devices: %s", e)
 
     def register_discovered_devices(self, devices: list) -> None:
-        """Called after discovery to register all discovered devices so they are tracked and persisted."""
+        """
+        Called after discovery to register all discovered devices.
+        Marks newly-seen devices as ONLINE (they just sent I-Am = alive),
+        and schedules a background batch name read.
+        """
         changed = False
+        to_mark_online: list[tuple[int, str]] = []
+        needs_name: list[int] = []          # IDs whose name is still generic
+
         for dev in devices:
-            dev_id = dev.device_id
+            dev_id  = dev.device_id
+            address = dev.address or ""
+            name    = dev.device_name or f"Device {dev_id}"
             existing = self._known_devices.get(dev_id)
             new_entry = {
                 "device_id": dev_id,
-                "name": dev.device_name or f"Device {dev_id}",
-                "address": dev.address or "",
+                "name": name,
+                "address": address,
             }
             if existing != new_entry:
                 self._known_devices[dev_id] = new_entry
                 changed = True
+
+            # Device responded with I-Am → it is ONLINE right now
+            to_mark_online.append((dev_id, address))
+
+            # If name is still generic, queue for a real name read
+            if name == f"Device {dev_id}":
+                needs_name.append(dev_id)
+
         if changed:
             self._save_known_devices()
             logger.info("Registered %d known devices (total: %d)", len(devices), len(self._known_devices))
 
+        # Mark all responding devices online (I-Am proof of life)
+        for dev_id, address in to_mark_online:
+            self._on_device_poll_success(dev_id, address)
+
+        # Kick off background name resolution if we have un-named devices
+        if needs_name and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self._resolve_names_background(needs_name), self._loop
+            ) if self._loop.is_running() else None
+
+    async def _resolve_names_background(self, device_ids: list[int]) -> None:
+        """
+        Reads objectName for a batch of devices in the background.
+        Reads DIRECTLY via network address (bypasses _devices cache which may be empty
+        when auto_start only discovered a subset of devices).
+        """
+        logger.info("[Names] Starting background name resolution for %d devices", len(device_ids))
+        resolved = 0
+        failed = 0
+        batch_count = 0
+
+        for did in device_ids:
+            if not self._running:
+                break
+            entry = self._known_devices.get(did)
+            if not entry:
+                continue
+
+            address = entry.get("address", "")
+            if not address:
+                failed += 1
+                continue
+
+            # Already has a real name — skip
+            if entry.get("name") and entry["name"] != f"Device {did}":
+                continue
+
+            try:
+                # NOTE: do NOT use asyncio.wait_for with BAC0 — it corrupts the internal state.
+                # BAC0's network.read accepts a timeout kwarg (seconds) for its own retries.
+                result = await self._bacnet._network.read(
+                    f"{address} device {did} objectName",
+                    timeout=5,
+                )
+                if result:
+                    name_str = str(result).strip()
+                    if name_str and name_str != f"Device {did}":
+                        entry["name"] = name_str
+                        self._bacnet._device_names[did] = name_str
+                        resolved += 1
+                        batch_count += 1
+                        logger.info("[Names] #%d → %s", did, name_str)
+                        if batch_count >= 20:
+                            self._save_known_devices()
+                            batch_count = 0
+                else:
+                    failed += 1
+            except Exception as exc:
+                failed += 1
+                logger.warning("[Names] #%d (%s) failed: %s: %s", did, address, type(exc).__name__, exc)
+
+            await asyncio.sleep(0.5)
+
+        self._save_known_devices()
+        logger.info("[Names] Done — resolved: %d, failed: %d", resolved, failed)
+
     def get_known_devices(self) -> dict[int, dict]:
         """Return all known devices (survived restarts)."""
         return dict(self._known_devices)
+
+    def _on_server_queried_devices(self, device_ids: set[int]) -> None:
+        """
+        Callback from BACnetPassiveListener when WHO-IS / WHO-HAS packets
+        are captured from the BMS server.
+        Registers those device IDs in known_devices with source='bms_server'.
+        """
+        changed = False
+        for did in device_ids:
+            if did not in self._known_devices:
+                self._known_devices[did] = {
+                    "device_id": did,
+                    "name": f"Device {did}",
+                    "address": "",
+                    "source": "bms_server",
+                }
+                changed = True
+            else:
+                # Upgrade source tag if not already marked
+                if self._known_devices[did].get("source") != "bms_server":
+                    # Keep existing but mark as also queried by server
+                    self._known_devices[did]["bms_queried"] = True
+                    changed = True
+
+        if changed:
+            self._save_known_devices()
+            logger.info("[Listener] Registered %d device(s) from BMS server WHO-IS (total known: %d)",
+                        len(device_ids), len(self._known_devices))
 
     # ── Background device ping loop ──────────────
     async def _device_ping_loop(self) -> None:
@@ -657,39 +875,31 @@ class GatewayEngine:
                             address = bdev.address
                             dev_info["address"] = address
                     if not address:
+                        last_pinged[dev_id] = now  # skip but record attempt
                         continue
 
                     last_pinged[dev_id] = now
 
-                    # Read objectName — ping + name resolution in one
-                    name_result = None
+                    # Use read_device_name — uses BAC0 internal routing (MSTP-safe)
+                    # Returns "Device X" on timeout/failure, real name on success
                     try:
-                        name_result = await self._bacnet.read_object(
-                            address, "device", dev_id, "objectName"
-                        )
-                        success = name_result is not None
+                        name_result = await self._bacnet.read_device_name(dev_id)
+                        success = bool(name_result and name_result != f"Device {dev_id}")
                     except Exception:
+                        name_result = None
                         success = False
 
                     if success:
                         ping_fails[dev_id] = 0
-                        # Update real name if we got one
-                        if name_result:
-                            name_str = str(name_result).strip()
-                            cur = dev_info.get("name", "")
-                            if name_str and name_str != f"Device {dev_id}" and (not cur or cur == f"Device {dev_id}"):
-                                dev_info["name"] = name_str
-                                self._save_known_devices()
-                        # Mark ONLINE — always update on success
+                        cur = dev_info.get("name", "")
+                        if name_result and (not cur or cur == f"Device {dev_id}"):
+                            dev_info["name"] = name_result
+                            self._save_known_devices()
                         self._on_device_poll_success(dev_id, address)
                     else:
-                        # DO NOT mark offline from ping — failure could be MSTP route not cached,
-                        # temporary timeout, etc. Only the poll loop marks devices offline.
-                        # If device has never been polled (no mappings), leave status as None (pending).
                         ping_fails[dev_id] = ping_fails.get(dev_id, 0) + 1
-                        # Log repeated failures for debugging only
                         if ping_fails.get(dev_id, 0) == 5:
-                            logger.debug("[Ping] Device %d at %s: 5 consecutive ping failures", dev_id, address)
+                            logger.debug("[Ping] Device %d at %s: 5 consecutive failures", dev_id, address)
 
                     await asyncio.sleep(STAGGER_S)
 

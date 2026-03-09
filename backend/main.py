@@ -294,6 +294,8 @@ async def get_devices_health():
             "fail_count": ps.get("fail_count", 0),
             "last_seen": ps.get("last_seen"),
             "point_count": point_counts.get(dev_id, 0),
+            # BMS server tracking flags
+            "bms_queried": info.get("source") == "bms_server" or info.get("bms_queried", False),
         })
         seen_ids.add(dev_id)
 
@@ -671,6 +673,25 @@ async def read_device_names(req: dict):
         return JSONResponse({"error": "Provide 1-20 device_ids"}, status_code=400)
     names = await bacnet_service.read_device_names_batch(device_ids)
     return {"names": names}
+
+
+@app.get("/api/debug/bac0-devices")
+async def debug_bac0_devices():
+    """Show BAC0 discoveredDevices structure to find which attribute holds the objectName."""
+    if not bacnet_service or not bacnet_service._network:
+        return {"error": "No BAC0 network"}
+    result = []
+    try:
+        for addr, dev in list(bacnet_service._network.discoveredDevices.items())[:5]:
+            attrs = {k: str(getattr(dev, k, "N/A"))[:50]
+                     for k in ["objectName", "description", "instance", "address",
+                                "deviceInstanceRangeHighLimit", "deviceInstanceRangeLowLimit",
+                                "vendorName", "modelName"]
+                     if hasattr(dev, k)}
+            result.append({"address": str(addr), "attrs": attrs, "type": type(dev).__name__})
+    except Exception as exc:
+        return {"error": str(exc)}
+    return {"count": len(bacnet_service._network.discoveredDevices), "samples": result}
 
 
 @app.get("/api/bacnet/diag/{device_id}")
