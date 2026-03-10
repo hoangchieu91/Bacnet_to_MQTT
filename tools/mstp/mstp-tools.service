@@ -1,0 +1,18 @@
+[Unit]
+Description=MS/TP Tools Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=__SCRIPT_DIR__
+ExecStart=__PYTHON__ __SCRIPT_DIR__/dashboard.py --config __SCRIPT_DIR__/config.yaml
+Restart=on-failure
+RestartSec=10
+# Higher scheduling priority to reduce MS/TP token-passing jitter
+Nice=-10
+# Allow raw serial port access
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

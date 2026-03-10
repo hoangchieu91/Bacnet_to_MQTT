@@ -1,0 +1,12 @@
+# MS/TP Tools — Python dependencies
+# Install with: pip install -r requirements.txt
+
+BAC0>=22.9.21
+bacpypes3>=0.0.82
+pyserial>=3.5
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+paho-mqtt>=1.6.1
+PyYAML>=6.0
+aiofiles>=23.1.0

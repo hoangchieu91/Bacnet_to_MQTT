@@ -1,0 +1,34 @@
+# MS/TP Tools Configuration
+# Copy and edit this file before running
+
+serial:
+  port: /dev/ttyUSB0        # USB-RS485 adapter port (check with: ls /dev/ttyUSB*)
+  baudrate: 38400            # Must match all devices on bus (9600 / 19200 / 38400 / 76800)
+  node_address: 127          # Pi's MS/TP node address (pick unused 0-127, 127 is safe default)
+  timeout: 10                # seconds to wait for responses during scan
+
+scan:
+  interval_seconds: 60       # Re-scan interval for health monitor
+  node_range: [0, 127]       # Address range to scan
+  timeout_per_node: 1.5      # seconds per node read
+
+bridge:
+  enabled: true
+  poll_interval: 30          # Seconds between polls for mapped objects
+  # objects_to_poll:         # Optional: list specific objects; empty = all discovered
+  # - device_id: 10121
+  #   object_type: analogValue
+  #   instance: 1
+
+mqtt:
+  enabled: false
+  broker_host: localhost
+  broker_port: 1883
+  username: ""
+  password: ""
+  topic_prefix: mstp         # mstp/{node_id}/{obj_type}/{instance}/value
+
+api:
+  host: 0.0.0.0
+  port: 8765                 # Dashboard accessible at http://<pi-ip>:8765
+  debug: false

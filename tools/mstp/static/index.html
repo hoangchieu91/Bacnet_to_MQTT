@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MS/TP Network Health Dashboard</title>
+<style>
+  :root {
+    --bg: #0d111a; --surface: #161c2a; --border: #2a3245;
+    --text: #e2e8f0; --muted: #64748b; --accent: #38bdf8;
+    --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+    --orange: #f97316; --radius: 8px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: system-ui,sans-serif; min-height: 100vh; }
+
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 14px 24px; display: flex; align-items: center; gap: 14px; }
+  header h1 { font-size: 1rem; font-weight: 700; }
+  .badge { font-size: 11px; padding: 3px 8px; border-radius: 99px; font-weight: 600; }
+  .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+    transition: background .4s; animation: pulse 2s infinite; }
+  .ws-dot.ok { background: var(--green); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+
+  .main { display: grid; grid-template-columns: 1fr 320px; gap: 16px;
+    padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+  @media(max-width:900px){ .main{grid-template-columns:1fr;} }
+
+  .card { background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; }
+  .card-title { font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .1em; color: var(--muted); margin-bottom: 12px; }
+
+  /* Stats row */
+  .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 16px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px; text-align: center; }
+  .stat-val { font-size: 1.6rem; font-weight: 800; }
+  .stat-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .online  { color: var(--green); }
+  .offline { color: var(--red); }
+
+  /* Node grid */
+  .grid-wrap { overflow: hidden; }
+  .grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; }
+  .cell { width: 100%; aspect-ratio: 1; border-radius: 4px; cursor: pointer;
+    background: #1e263a; border: 1px solid #2a3245; transition: all .2s;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; color: transparent; }
+  .cell:hover { border-color: var(--accent); color: var(--text); }
+  .cell.online  { background: #14532d; border-color: #22c55e; color: #86efac; }
+  .cell.offline { background: #450a0a; border-color: #ef4444; color: #fca5a5; }
+  .cell.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* Event feed */
+  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 400px; overflow-y: auto; }
+  .ev { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
+    border-radius: 6px; background: #0f1623; border: 1px solid #1e263a; font-size: 12px; }
+  .ev-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .ev-time { color: var(--muted); font-size: 10px; white-space: nowrap; }
+  .ev-msg  { color: var(--text); }
+
+  /* Node detail panel */
+  .detail { font-size: 12px; }
+  .detail-row { display: flex; justify-content: space-between; padding: 6px 0;
+    border-bottom: 1px solid var(--border); }
+  .detail-row:last-child { border-bottom: none; }
+  .detail-key { color: var(--muted); }
+  .detail-val { font-weight: 600; color: var(--text); }
+  .rtt-bar-wrap { margin-top: 10px; }
+  .rtt-bar-bg { background: var(--border); border-radius: 4px; height: 6px; overflow: hidden; }
+  .rtt-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+
+  /* Scan button */
+  .btn { background: linear-gradient(135deg,#0ea5e9,#6366f1); color: #fff;
+    border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px;
+    font-weight: 700; cursor: pointer; transition: opacity .2s; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .btn:hover:not(:disabled) { opacity: .85; }
+
+  /* Legend */
+  .legend { display: flex; gap: 14px; margin-bottom: 8px; font-size: 11px; }
+  .leg { display: flex; align-items: center; gap: 5px; }
+  .leg-dot { width: 10px; height: 10px; border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="ws-dot" id="wsStatus"></div>
+  <h1>🔌 MS/TP Network Health Dashboard</h1>
+  <span class="badge" id="scanBadge" style="background:#1e263a;color:var(--muted)">waiting…</span>
+  <div style="flex:1"></div>
+  <button class="btn" id="scanBtn" onclick="triggerScan()">⟳ Scan Now</button>
+</header>
+
+<div class="main">
+  <div>
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat"><div class="stat-val online" id="sOnline">—</div><div class="stat-lbl">Online</div></div>
+      <div class="stat"><div class="stat-val offline" id="sOffline">—</div><div class="stat-lbl">Offline</div></div>
+      <div class="stat"><div class="stat-val" id="sTotal">—</div><div class="stat-lbl">Total Nodes</div></div>
+      <div class="stat"><div class="stat-val" id="sScan">0</div><div class="stat-lbl">Scans Done</div></div>
+    </div>
+
+    <!-- Node Grid -->
+    <div class="card grid-wrap">
+      <div class="card-title">Node Grid (MS/TP address 0 – 127)</div>
+      <div class="legend">
+        <div class="leg"><div class="leg-dot" style="background:#14532d;border:1px solid #22c55e"></div> Online</div>
+        <div class="leg"><div class="leg-dot" style="background:#450a0a;border:1px solid #ef4444"></div> Offline</div>
+        <div class="leg"><div class="leg-dot" style="background:#1e263a;border:1px solid #2a3245"></div> Unknown</div>
+      </div>
+      <div class="grid" id="nodeGrid"></div>
+    </div>
+  </div>
+
+  <!-- Right column -->
+  <div style="display:flex;flex-direction:column;gap:14px;">
+    <!-- Node Detail -->
+    <div class="card" id="detailCard">
+      <div class="card-title">Node Detail</div>
+      <div style="color:var(--muted);font-size:12px;">Click a node to see details</div>
+    </div>
+
+    <!-- Event Feed -->
+    <div class="card">
+      <div class="card-title">Event Feed</div>
+      <div class="feed" id="eventFeed"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const state = { nodes: {}, stats: {}, selected: null };
+let ws = null;
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => document.getElementById('wsStatus').classList.add('ok');
+  ws.onclose = () => { document.getElementById('wsStatus').classList.remove('ok'); setTimeout(connect, 3000); };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'init') {
+      (msg.nodes || []).forEach(n => state.nodes[n.address] = n);
+      if (msg.stats) updateStats(msg.stats);
+    } else if (msg.type === 'online' || msg.type === 'offline') {
+      const n = state.nodes[msg.node_id] || { address: msg.node_id };
+      n.online = msg.type === 'online';
+      n.name   = msg.name || n.name || '';
+      n.rtt_ms = msg.rtt_ms ?? n.rtt_ms;
+      n.last_seen = msg.timestamp;
+      state.nodes[msg.node_id] = n;
+      addEvent(msg);
+    } else if (msg.type === 'stats') {
+      updateStats(msg);
+    }
+    renderGrid();
+    if (state.selected !== null) renderDetail(state.selected);
+  };
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+function updateStats(s) {
+  Object.assign(state.stats, s);
+  document.getElementById('sOnline').textContent  = s.online_nodes  ?? '—';
+  document.getElementById('sOffline').textContent = s.offline_nodes ?? '—';
+  document.getElementById('sTotal').textContent   = s.total_nodes   ?? '—';
+  if (s.scan_count !== undefined) document.getElementById('sScan').textContent = s.scan_count;
+  document.getElementById('scanBadge').textContent = `Last scan: ${s.scan_count ?? 0} cycles`;
+}
+
+// ── Grid ──────────────────────────────────────────────────────────────────────
+function renderGrid() {
+  const grid = document.getElementById('nodeGrid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 128; i++) {
+    const n = state.nodes[i];
+    const cls = !n ? '' : n.online ? 'online' : 'offline';
+    const sel = state.selected === i ? 'selected' : '';
+    const cell = document.createElement('div');
+    cell.className = `cell ${cls} ${sel}`;
+    cell.textContent = i;
+    cell.title = n ? `Node ${i}: ${n.name || 'unknown'}` : `Node ${i}`;
+    cell.onclick = () => { state.selected = state.selected === i ? null : i; renderGrid(); renderDetail(i); };
+    grid.appendChild(cell);
+  }
+}
+
+// ── Detail Panel ──────────────────────────────────────────────────────────────
+function renderDetail(nodeId) {
+  const panel = document.getElementById('detailCard');
+  const n = state.nodes[nodeId];
+  if (!n) {
+    panel.innerHTML = `<div class="card-title">Node ${nodeId}</div><div style="color:var(--muted);font-size:12px;">No data yet</div>`;
+    return;
+  }
+  const status = n.online ? `<span style="color:var(--green)">● Online</span>` : `<span style="color:var(--red)">● Offline</span>`;
+  const rttPct = Math.min(100, (n.rtt_ms || 0) / 5);  // 500ms = 100%
+  const rows = [
+    ['Address', n.address],
+    ['Name', n.name || '—'],
+    ['Vendor', n.vendor || '—'],
+    ['Model', n.model || '—'],
+    ['Firmware', n.firmware || '—'],
+    ['State', n.system_status || '—'],
+    ['RTT', n.rtt_ms >= 0 ? `${n.rtt_ms}ms` : '—'],
+    ['Objects', n.object_count ?? '—'],
+    ['Errors', n.read_errors ?? 0],
+  ].map(([k,v]) => `<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${v}</span></div>`).join('');
+
+  panel.innerHTML = `
+    <div class="card-title">Node ${nodeId} — ${status}</div>
+    <div class="detail">${rows}</div>
+    ${n.rtt_ms >= 0 ? `
+    <div class="rtt-bar-wrap">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:4px;">
+        <span>RTT</span><span>${n.rtt_ms}ms</span>
+      </div>
+      <div class="rtt-bar-bg"><div class="rtt-bar" style="width:${rttPct}%"></div></div>
+    </div>` : ''}
+  `;
+}
+
+// ── Events ────────────────────────────────────────────────────────────────────
+function addEvent(ev) {
+  const feed = document.getElementById('eventFeed');
+  const icon = ev.type === 'online' ? '🟢' : ev.type === 'offline' ? '🔴' : 'ℹ️';
+  const time = new Date(ev.timestamp * 1000).toLocaleTimeString();
+  const msg  = ev.type === 'online'
+    ? `Node <b>${ev.node_id}</b> online${ev.name ? ` — ${ev.name}` : ''}${ev.rtt_ms ? ` (${ev.rtt_ms}ms)` : ''}`
+    : `Node <b>${ev.node_id}</b> offline`;
+
+  const el = document.createElement('div');
+  el.className = 'ev';
+  el.innerHTML = `<span class="ev-icon">${icon}</span>
+    <div><div class="ev-msg">${msg}</div><div class="ev-time">${time}</div></div>`;
+  feed.prepend(el);
+  while (feed.children.length > 80) feed.removeChild(feed.lastChild);
+}
+
+// ── Scan trigger ──────────────────────────────────────────────────────────────
+async function triggerScan() {
+  const btn = document.getElementById('scanBtn');
+  btn.disabled = true; btn.textContent = '⟳ Scanning…';
+  try {
+    await fetch('/api/scan', { method: 'POST' });
+    btn.textContent = '✓ Triggered';
+  } catch { btn.textContent = '✗ Failed'; }
+  setTimeout(() => { btn.disabled = false; btn.textContent = '⟳ Scan Now'; }, 3000);
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  // Load initial data via REST
+  try {
+    const [nodesR, statsR, eventsR] = await Promise.all([
+      fetch('/api/nodes').then(r => r.json()),
+      fetch('/api/stats').then(r => r.json()),
+      fetch('/api/events?limit=20').then(r => r.json()),
+    ]);
+    nodesR.forEach(n => state.nodes[n.address] = n);
+    updateStats(statsR);
+    eventsR.reverse().forEach(ev => addEvent(ev));
+  } catch(e) { console.warn('Init fetch failed', e); }
+  renderGrid();
+  connect();
+}
+
+init();
+</script>
+</body>
+</html>
