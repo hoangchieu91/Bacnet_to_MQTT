@@ -199,6 +199,140 @@ async def sniffer_pathologies() -> list[dict]:
     return report.get("pathologies", [])
 
 
+# ── File Transfer API ─────────────────────────────────────────────────────────
+
+from fastapi import UploadFile, File, Form
+from fastapi.responses import StreamingResponse
+from bacnet_file_transfer import BacnetFileTransfer, TransferProgress
+
+@app.post("/api/file/upload")
+async def file_upload(
+    file: UploadFile = File(...),
+    address: str = Form(...),
+    file_instance: int = Form(1),
+    reload: str = Form("false"),
+    device_instance: int = Form(0),
+) -> dict:
+    """Receive file from browser, upload to BACnet device via AtomicWriteFile."""
+    contents = await file.read()
+    bacnet = _monitor._scanner._bacnet if _monitor else None
+
+    prog_state: list[TransferProgress] = []
+
+    def _cb(p: TransferProgress) -> None:
+        prog_state.clear()
+        prog_state.append(p)
+        # Broadcast progress to WebSocket clients
+        asyncio.create_task(_broadcast({
+            "type": "xfer_progress",
+            "file": file.filename,
+            "address": address,
+            "pct": round(p.pct, 1),
+            "status": p.status,
+        }))
+
+    xfer = BacnetFileTransfer.from_config("config.yaml", bacnet=bacnet, progress_cb=_cb)
+    result = await xfer.upload(
+        address=address,
+        file_path="/dev/stdin",   # handled below via temp file
+        file_object_instance=file_instance,
+    )
+    # Re-do with actual bytes via helper
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename or "upload").suffix) as tmp:
+        tmp.write(contents)
+        tmp_path = tmp.name
+    try:
+        result = await xfer.upload(address, tmp_path, file_instance)
+        if result.status == "done" and reload.lower() == "true" and device_instance:
+            await xfer.trigger_reload(address, device_instance)
+    finally:
+        os.unlink(tmp_path)
+        if xfer._owned_bacnet:
+            await xfer.close()
+
+    return result.to_dict()
+
+
+@app.get("/api/file/download")
+async def file_download(
+    address: str,
+    file_instance: int = 1,
+    filename: str = "download.app",
+) -> StreamingResponse:
+    """Download File Object from BACnet device and stream to browser."""
+    import tempfile, os
+    bacnet = _monitor._scanner._bacnet if _monitor else None
+    xfer = BacnetFileTransfer.from_config("config.yaml", bacnet=bacnet)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp:
+        tmp_path = tmp.name
+
+    result = await xfer.download(address, file_instance, tmp_path)
+    if xfer._owned_bacnet:
+        await xfer.close()
+
+    if result.status != "done":
+        os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=result.error)
+
+    def iterfile():
+        with open(tmp_path, "rb") as f:
+            yield from f
+        os.unlink(tmp_path)
+
+    return StreamingResponse(
+        iterfile(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ── Serial port detection ─────────────────────────────────────────────────────
+
+@app.get("/api/serial-ports")
+async def list_serial_ports() -> dict:
+    """List available serial ports on the system."""
+    import glob
+    ports = []
+    for pattern in ["/dev/ttyUSB*", "/dev/ttyAMA*", "/dev/ttyS[0-9]"]:
+        for p in sorted(glob.glob(pattern)):
+            ports.append({"port": p, "description": _guess_port_desc(p)})
+    return {"ports": ports}
+
+
+def _guess_port_desc(port: str) -> str:
+    name = Path(port).name
+    if "USB" in name:
+        return "USB-Serial (CH340/CP210x/FTDI)"
+    if "AMA" in name:
+        return "Raspberry Pi UART (GPIO14/15)"
+    return "Serial port"
+
+
+# ── Runtime config API ────────────────────────────────────────────────────────
+
+@app.put("/api/config")
+async def update_config(body: dict) -> dict:
+    """Update config.yaml and schedule restart of scanner+sniffer."""
+    try:
+        with open("config.yaml") as f:
+            cfg = yaml.safe_load(f)
+
+        if "serial" in body:
+            cfg.setdefault("serial", {}).update(body["serial"])
+        if "scan" in body:
+            cfg.setdefault("scan", {}).update(body["scan"])
+
+        with open("config.yaml", "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+
+        logger.info("[Config] Updated: %s", body)
+        return {"status": "saved", "config": cfg}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")

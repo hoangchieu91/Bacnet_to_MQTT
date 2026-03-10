@@ -1,276 +1,753 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>MS/TP Network Health Dashboard</title>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>MS/TP Tools Dashboard</title>
 <style>
-  :root {
-    --bg: #0d111a; --surface: #161c2a; --border: #2a3245;
-    --text: #e2e8f0; --muted: #64748b; --accent: #38bdf8;
-    --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
-    --orange: #f97316; --radius: 8px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: system-ui,sans-serif; min-height: 100vh; }
+:root{
+  --bg:#0d111a;--surface:#161c2a;--surface2:#1e2740;--border:#2a3245;
+  --text:#e2e8f0;--muted:#64748b;--accent:#38bdf8;
+  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;
+  --purple:#a855f7;--radius:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh;}
 
-  header { background: var(--surface); border-bottom: 1px solid var(--border);
-    padding: 14px 24px; display: flex; align-items: center; gap: 14px; }
-  header h1 { font-size: 1rem; font-weight: 700; }
-  .badge { font-size: 11px; padding: 3px 8px; border-radius: 99px; font-weight: 600; }
-  .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red);
-    transition: background .4s; animation: pulse 2s infinite; }
-  .ws-dot.ok { background: var(--green); }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+/* ── Header ────────────────────────────────── */
+header{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:12px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
+.ws-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0;
+  animation:pulse 2s infinite;}
+.ws-dot.ok{background:var(--green);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-  .main { display: grid; grid-template-columns: 1fr 320px; gap: 16px;
-    padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
-  @media(max-width:900px){ .main{grid-template-columns:1fr;} }
+/* ── Tab bar ────────────────────────────────── */
+.tabs{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 20px;display:flex;gap:2px;overflow-x:auto;}
+.tab{padding:10px 18px;font-size:12px;font-weight:600;cursor:pointer;
+  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;transition:.15s;}
+.tab:hover{color:var(--text);}
+.tab.active{border-bottom-color:var(--accent);color:var(--accent);}
 
-  .card { background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 16px; }
-  .card-title { font-size: 10px; font-weight: 700; text-transform: uppercase;
-    letter-spacing: .1em; color: var(--muted); margin-bottom: 12px; }
+/* ── Layout ─────────────────────────────────── */
+.page{display:none;padding:18px 20px;max-width:1360px;margin:0 auto;}
+.page.active{display:block;}
 
-  /* Stats row */
-  .stats-row { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-bottom: 16px; }
-  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 14px; text-align: center; }
-  .stat-val { font-size: 1.6rem; font-weight: 800; }
-  .stat-lbl { font-size: 10px; color: var(--muted); margin-top: 2px; }
-  .online  { color: var(--green); }
-  .offline { color: var(--red); }
+/* ── Cards ───────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+.card-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;}
+.two-col{display:grid;grid-template-columns:1fr 320px;gap:14px;}
+@media(max-width:900px){.two-col{grid-template-columns:1fr;}}
 
-  /* Node grid */
-  .grid-wrap { overflow: hidden; }
-  .grid { display: grid; grid-template-columns: repeat(16, 1fr); gap: 4px; }
-  .cell { width: 100%; aspect-ratio: 1; border-radius: 4px; cursor: pointer;
-    background: #1e263a; border: 1px solid #2a3245; transition: all .2s;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 9px; font-weight: 700; color: transparent; }
-  .cell:hover { border-color: var(--accent); color: var(--text); }
-  .cell.online  { background: #14532d; border-color: #22c55e; color: #86efac; }
-  .cell.offline { background: #450a0a; border-color: #ef4444; color: #fca5a5; }
-  .cell.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* ── Stats row ───────────────────────────────── */
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;}
+@media(max-width:700px){.stats-row{grid-template-columns:repeat(2,1fr);}}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;text-align:center;}
+.stat-val{font-size:1.5rem;font-weight:800;}
+.stat-lbl{font-size:10px;color:var(--muted);margin-top:2px;}
+.green{color:var(--green);} .red{color:var(--red);} .yellow{color:var(--yellow);}
+.orange{color:var(--orange);} .purple{color:var(--purple);}
 
-  /* Event feed */
-  .feed { display: flex; flex-direction: column; gap: 6px; max-height: 400px; overflow-y: auto; }
-  .ev { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
-    border-radius: 6px; background: #0f1623; border: 1px solid #1e263a; font-size: 12px; }
-  .ev-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
-  .ev-time { color: var(--muted); font-size: 10px; white-space: nowrap; }
-  .ev-msg  { color: var(--text); }
+/* ── Node Grid ───────────────────────────────── */
+.grid{display:grid;grid-template-columns:repeat(16,1fr);gap:3px;}
+.cell{aspect-ratio:1;border-radius:3px;cursor:pointer;background:#1a2136;
+  border:1px solid #252f48;transition:all .15s;display:flex;align-items:center;
+  justify-content:center;font-size:8px;font-weight:700;color:transparent;}
+.cell:hover{border-color:var(--accent);color:var(--text);}
+.cell.online{background:#14532d;border-color:var(--green);color:#86efac;}
+.cell.offline{background:#450a0a;border-color:var(--red);color:#fca5a5;}
+.cell.selected{outline:2px solid var(--accent);outline-offset:1px;}
+.legend{display:flex;gap:12px;margin-bottom:8px;font-size:11px;}
+.leg{display:flex;align-items:center;gap:5px;}
+.leg-sq{width:10px;height:10px;border-radius:2px;}
 
-  /* Node detail panel */
-  .detail { font-size: 12px; }
-  .detail-row { display: flex; justify-content: space-between; padding: 6px 0;
-    border-bottom: 1px solid var(--border); }
-  .detail-row:last-child { border-bottom: none; }
-  .detail-key { color: var(--muted); }
-  .detail-val { font-weight: 600; color: var(--text); }
-  .rtt-bar-wrap { margin-top: 10px; }
-  .rtt-bar-bg { background: var(--border); border-radius: 4px; height: 6px; overflow: hidden; }
-  .rtt-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .4s; }
+/* ── Event feed ──────────────────────────────── */
+.feed{display:flex;flex-direction:column;gap:5px;max-height:360px;overflow-y:auto;}
+.ev{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;
+  border-radius:5px;background:#0f1623;border:1px solid #1e263a;font-size:11px;}
+.ev-time{color:var(--muted);font-size:10px;white-space:nowrap;}
 
-  /* Scan button */
-  .btn { background: linear-gradient(135deg,#0ea5e9,#6366f1); color: #fff;
-    border: none; border-radius: 6px; padding: 8px 16px; font-size: 12px;
-    font-weight: 700; cursor: pointer; transition: opacity .2s; }
-  .btn:disabled { opacity: .5; cursor: default; }
-  .btn:hover:not(:disabled) { opacity: .85; }
+/* ── Pathologies ─────────────────────────────── */
+.path-list{display:flex;flex-direction:column;gap:8px;}
+.path-item{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;
+  border-radius:6px;border:1px solid var(--border);}
+.path-item.critical{background:#1a0a0a;border-color:var(--red);}
+.path-item.warning{background:#1a1200;border-color:var(--yellow);}
+.path-item.info{background:#0d1a24;border-color:var(--accent);}
+.path-code{font-size:10px;font-weight:700;font-family:monospace;margin-bottom:3px;opacity:.7;}
+.path-desc{font-size:12px;}
+.path-detail{font-size:11px;color:var(--muted);margin-top:4px;}
 
-  /* Legend */
-  .legend { display: flex; gap: 14px; margin-bottom: 8px; font-size: 11px; }
-  .leg { display: flex; align-items: center; gap: 5px; }
-  .leg-dot { width: 10px; height: 10px; border-radius: 2px; }
+/* ── Node stats table ────────────────────────── */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.tbl th{text-align:left;padding:6px 10px;background:var(--surface2);
+  color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;}
+.tbl td{padding:6px 10px;border-top:1px solid var(--border);}
+.tbl tr:hover td{background:#1a2136;}
+.fps-high{color:var(--orange);}
+.fps-crit{color:var(--red);font-weight:700;}
+
+/* ── File transfer ───────────────────────────── */
+.xfer-form{display:grid;gap:12px;}
+.field-row{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:8px;font-size:12px;}
+.inp{background:#0d111a;border:1px solid var(--border);border-radius:5px;
+  padding:7px 10px;color:var(--text);font-size:12px;width:100%;}
+.inp:focus{outline:none;border-color:var(--accent);}
+.progress-bar-bg{background:var(--border);border-radius:4px;height:8px;overflow:hidden;margin:10px 0;}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--purple));
+  border-radius:4px;transition:width .3s;}
+.xfer-log{font-size:11px;font-family:monospace;color:var(--muted);
+  background:#0a0d14;border:1px solid var(--border);border-radius:5px;
+  padding:10px;max-height:160px;overflow-y:auto;margin-top:8px;}
+
+/* ── Network config ──────────────────────────── */
+.cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:600px){.cfg-grid{grid-template-columns:1fr;}}
+.cfg-section{font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:700;text-transform:uppercase;}
+
+/* ── Buttons ─────────────────────────────────── */
+.btn{background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;
+  border:none;border-radius:6px;padding:8px 16px;font-size:12px;
+  font-weight:700;cursor:pointer;transition:opacity .2s;white-space:nowrap;}
+.btn:disabled{opacity:.4;cursor:default;}
+.btn:hover:not(:disabled){opacity:.85;}
+.btn-sm{padding:5px 12px;font-size:11px;}
+.btn-danger{background:linear-gradient(135deg,#dc2626,#7f1d1d);}
+.btn-success{background:linear-gradient(135deg,#16a34a,#065f46);}
+.badge{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;}
+
+/* ── Detail panel ────────────────────────────── */
+.detail-row{display:flex;justify-content:space-between;padding:5px 0;
+  border-bottom:1px solid var(--border);font-size:12px;}
+.detail-row:last-child{border-bottom:none;}
+.detail-key{color:var(--muted);}
+.rtt-bar-bg{background:var(--border);border-radius:3px;height:5px;overflow:hidden;margin-top:8px;}
+.rtt-bar{height:100%;background:var(--accent);border-radius:3px;transition:width .4s;}
+
+/* ── Bus utilization ring ────────────────────── */
+.util-ring{position:relative;width:80px;height:80px;flex-shrink:0;}
+.util-ring svg{transform:rotate(-90deg);}
+.util-ring-label{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;font-size:14px;font-weight:800;}
+.util-ring-sub{font-size:9px;color:var(--muted);margin-top:1px;}
 </style>
 </head>
 <body>
 
 <header>
   <div class="ws-dot" id="wsStatus"></div>
-  <h1>🔌 MS/TP Network Health Dashboard</h1>
-  <span class="badge" id="scanBadge" style="background:#1e263a;color:var(--muted)">waiting…</span>
+  <h1>🔌 MS/TP Tools Dashboard</h1>
+  <span id="networkLabel" style="font-size:11px;color:var(--muted);background:#1e2740;
+    padding:3px 10px;border-radius:99px;font-family:monospace;">/dev/ttyUSB0 @ 38400</span>
   <div style="flex:1"></div>
-  <button class="btn" id="scanBtn" onclick="triggerScan()">⟳ Scan Now</button>
+  <button class="btn btn-sm" onclick="triggerScan()">⟳ Scan</button>
 </header>
 
-<div class="main">
-  <div>
-    <!-- Stats -->
-    <div class="stats-row">
-      <div class="stat"><div class="stat-val online" id="sOnline">—</div><div class="stat-lbl">Online</div></div>
-      <div class="stat"><div class="stat-val offline" id="sOffline">—</div><div class="stat-lbl">Offline</div></div>
-      <div class="stat"><div class="stat-val" id="sTotal">—</div><div class="stat-lbl">Total Nodes</div></div>
-      <div class="stat"><div class="stat-val" id="sScan">0</div><div class="stat-lbl">Scans Done</div></div>
-    </div>
+<div class="tabs">
+  <div class="tab active" onclick="showTab('monitor')">🔬 Monitor</div>
+  <div class="tab" onclick="showTab('sniffer')">📡 Bus Health</div>
+  <div class="tab" onclick="showTab('filetransfer')">📤 File Transfer</div>
+  <div class="tab" onclick="showTab('config')">⚙️ Network Config</div>
+</div>
 
-    <!-- Node Grid -->
-    <div class="card grid-wrap">
-      <div class="card-title">Node Grid (MS/TP address 0 – 127)</div>
-      <div class="legend">
-        <div class="leg"><div class="leg-dot" style="background:#14532d;border:1px solid #22c55e"></div> Online</div>
-        <div class="leg"><div class="leg-dot" style="background:#450a0a;border:1px solid #ef4444"></div> Offline</div>
-        <div class="leg"><div class="leg-dot" style="background:#1e263a;border:1px solid #2a3245"></div> Unknown</div>
+<!-- ══════════ TAB: MONITOR ══════════ -->
+<div class="page active" id="page-monitor">
+  <div class="stats-row">
+    <div class="stat"><div class="stat-val green" id="sOnline">—</div><div class="stat-lbl">Online</div></div>
+    <div class="stat"><div class="stat-val red" id="sOffline">—</div><div class="stat-lbl">Offline</div></div>
+    <div class="stat"><div class="stat-val" id="sTotal">—</div><div class="stat-lbl">Total Nodes</div></div>
+    <div class="stat"><div class="stat-val" id="sScan">0</div><div class="stat-lbl">Scans</div></div>
+  </div>
+  <div class="two-col">
+    <div>
+      <div class="card">
+        <div class="card-title">Node Grid (MS/TP 0–127)</div>
+        <div class="legend">
+          <div class="leg"><div class="leg-sq" style="background:#14532d;border:1px solid var(--green)"></div> Online</div>
+          <div class="leg"><div class="leg-sq" style="background:#450a0a;border:1px solid var(--red)"></div> Offline</div>
+          <div class="leg"><div class="leg-sq" style="background:#1a2136;border:1px solid #252f48"></div> Unknown</div>
+        </div>
+        <div class="grid" id="nodeGrid"></div>
       </div>
-      <div class="grid" id="nodeGrid"></div>
+    </div>
+    <div>
+      <div class="card" id="detailCard">
+        <div class="card-title">Node Detail</div>
+        <div style="font-size:12px;color:var(--muted)">Click node to view</div>
+      </div>
+      <div class="card">
+        <div class="card-title">Event Feed</div>
+        <div class="feed" id="eventFeed"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: BUS HEALTH (SNIFFER) ══════════ -->
+<div class="page" id="page-sniffer">
+  <div class="stats-row">
+    <div class="stat">
+      <div style="display:flex;justify-content:center;margin-bottom:4px;">
+        <div class="util-ring">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle cx="40" cy="40" r="32" fill="none" stroke="#252f48" stroke-width="8"/>
+            <circle id="utilCircle" cx="40" cy="40" r="32" fill="none"
+              stroke="var(--accent)" stroke-width="8" stroke-dasharray="201 201" stroke-dashoffset="201"/>
+          </svg>
+          <div class="util-ring-label">
+            <span id="utilPct">—</span>
+            <span class="util-ring-sub">util%</span>
+          </div>
+        </div>
+      </div>
+      <div class="stat-lbl">Bus Utilization</div>
+    </div>
+    <div class="stat"><div class="stat-val" id="sFPS">—</div><div class="stat-lbl">Frames/s</div></div>
+    <div class="stat"><div class="stat-val yellow" id="sBadPct">—</div><div class="stat-lbl">Bad CRC %</div></div>
+    <div class="stat"><div class="stat-val orange" id="sSilence">—</div><div class="stat-lbl">Max Silence (ms)</div></div>
+  </div>
+
+  <!-- Pathologies -->
+  <div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between;">
+      <span>🩺 Diagnostics</span>
+      <button class="btn btn-sm" onclick="loadSniffer()">↻ Refresh</button>
+    </div>
+    <div class="path-list" id="pathList"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
+  </div>
+
+  <!-- Node stats table -->
+  <div class="card">
+    <div class="card-title">Per-Node Statistics</div>
+    <div style="overflow-x:auto;">
+      <table class="tbl">
+        <thead><tr>
+          <th>MAC</th><th>Frames/s</th><th>KB/s</th><th>Bad CRC</th>
+          <th>Token passes</th><th>Token avg (ms)</th><th>Device IDs</th>
+        </tr></thead>
+        <tbody id="nodeStatsBody"></tbody>
+      </table>
     </div>
   </div>
 
-  <!-- Right column -->
-  <div style="display:flex;flex-direction:column;gap:14px;">
-    <!-- Node Detail -->
-    <div class="card" id="detailCard">
-      <div class="card-title">Node Detail</div>
-      <div style="color:var(--muted);font-size:12px;">Click a node to see details</div>
+  <!-- Frame log -->
+  <div class="card">
+    <div class="card-title">Recent Frames</div>
+    <div style="overflow-x:auto;">
+      <table class="tbl">
+        <thead><tr><th>Time</th><th>Type</th><th>Src</th><th>Dst</th><th>Len</th><th>Valid</th></tr></thead>
+        <tbody id="frameLogBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: FILE TRANSFER ══════════ -->
+<div class="page" id="page-filetransfer">
+  <div class="two-col">
+    <div>
+      <div class="card">
+        <div class="card-title">📤 Upload File to Device (AtomicWriteFile)</div>
+        <div class="xfer-form">
+          <div class="field-row">
+            <label>Device Address</label>
+            <input class="inp" id="xAddr" placeholder="192.168.20.50 or 8700:5" value=""/>
+          </div>
+          <div class="field-row">
+            <label>File Object #</label>
+            <input class="inp" id="xFileInst" type="number" value="1" min="1"/>
+          </div>
+          <div class="field-row">
+            <label>File</label>
+            <input class="inp" id="xFile" type="file" accept="*/*"/>
+          </div>
+          <div class="field-row">
+            <label></label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;">
+              <input type="checkbox" id="xReload"/> Send ReinitializeDevice after upload
+            </label>
+          </div>
+          <div class="field-row">
+            <label>Device Instance</label>
+            <input class="inp" id="xDevInst" type="number" value="0" min="0"
+              title="Required if reload is checked"/>
+          </div>
+          <div>
+            <button class="btn" id="uploadBtn" onclick="startUpload()">📤 Upload</button>
+            <span id="uploadStatus" style="font-size:11px;margin-left:10px;color:var(--muted)"></span>
+          </div>
+        </div>
+        <div class="progress-bar-bg" id="xferBarBg" style="display:none">
+          <div class="progress-bar" id="xferBar" style="width:0%"></div>
+        </div>
+        <div class="xfer-log" id="xferLog" style="display:none"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📥 Download File from Device (AtomicReadFile)</div>
+        <div class="xfer-form">
+          <div class="field-row">
+            <label>Device Address</label>
+            <input class="inp" id="dnAddr" placeholder="192.168.20.50 or 8700:5"/>
+          </div>
+          <div class="field-row">
+            <label>File Object #</label>
+            <input class="inp" id="dnFileInst" type="number" value="1" min="1"/>
+          </div>
+          <div class="field-row">
+            <label>Output filename</label>
+            <input class="inp" id="dnFilename" placeholder="output.app" value="download.app"/>
+          </div>
+          <button class="btn" id="downloadBtn" onclick="startDownload()">📥 Download</button>
+        </div>
+        <div class="progress-bar-bg" id="dnBarBg" style="display:none">
+          <div class="progress-bar" id="dnBar" style="width:0%"></div>
+        </div>
+        <div class="xfer-log" id="dnLog" style="display:none"></div>
+      </div>
     </div>
 
-    <!-- Event Feed -->
-    <div class="card">
-      <div class="card-title">Event Feed</div>
-      <div class="feed" id="eventFeed"></div>
+    <div>
+      <div class="card">
+        <div class="card-title">ℹ️ Hướng dẫn</div>
+        <div style="font-size:12px;color:var(--muted);line-height:1.7;">
+          <p><b style="color:var(--text)">Standard BACnet File Transfer</b><br>
+          Dùng <code>AtomicWriteFile</code> để ghi file lên <b>File Object</b> của thiết bị.</p>
+          <br>
+          <p><b style="color:var(--text)">CPO-RL4 / CPO-PC6A:</b></p>
+          <p>✅ Application file (.app): upload qua File Object instance 1</p>
+          <p>✅ Config backup: download từ File Object</p>
+          <p>⚠️ Firmware core (low-level): cần ECY Configurator / Niagara N4</p>
+          <br>
+          <p><b style="color:var(--text)">Địa chỉ:</b></p>
+          <p>• BACnet/IP: <code>192.168.20.50</code></p>
+          <p>• MS/TP qua router: <code>8700:5</code> (network:node)</p>
+          <br>
+          <p><b style="color:var(--text)">CLI:</b></p>
+          <code style="display:block;background:#0a0d14;padding:8px;border-radius:4px;margin:4px 0;word-break:break-all;">
+          python3 bacnet_file_transfer.py upload --address 192.168.x.x --file-instance 1 --path app.file</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: NETWORK CONFIG ══════════ -->
+<div class="page" id="page-config">
+  <div class="two-col">
+    <div>
+      <div class="card">
+        <div class="card-title">⚙️ MS/TP Network Configuration</div>
+        <div class="cfg-grid">
+          <div>
+            <div class="cfg-section">Serial Port</div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Port</label>
+              <select class="inp" id="cfgPort">
+                <option>/dev/ttyUSB0</option>
+                <option>/dev/ttyUSB1</option>
+                <option>/dev/ttyAMA0</option>
+                <option>/dev/ttyS0</option>
+              </select>
+            </div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Baud Rate</label>
+              <select class="inp" id="cfgBaud">
+                <option>9600</option>
+                <option>19200</option>
+                <option selected>38400</option>
+                <option>57600</option>
+                <option>76800</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <label style="font-size:12px">Node Address</label>
+              <input class="inp" id="cfgNode" type="number" value="127" min="0" max="127"/>
+            </div>
+          </div>
+          <div>
+            <div class="cfg-section">Scan Settings</div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Interval (s)</label>
+              <input class="inp" id="cfgInterval" type="number" value="60" min="10"/>
+            </div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Node Range</label>
+              <div style="display:flex;gap:6px;">
+                <input class="inp" id="cfgNodeMin" type="number" value="0" min="0" max="127" style="width:70px" placeholder="Min"/>
+                <input class="inp" id="cfgNodeMax" type="number" value="127" min="0" max="127" style="width:70px" placeholder="Max"/>
+              </div>
+            </div>
+            <div class="field-row">
+              <label style="font-size:12px">Timeout/node (s)</label>
+              <input class="inp" id="cfgTimeout" type="number" value="1.5" step=".5" min=".5"/>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center;">
+          <button class="btn" onclick="saveConfig()">💾 Save & Restart</button>
+          <span id="cfgStatus" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        <div style="margin-top:10px;padding:10px;background:#0a0d14;border-radius:6px;font-size:11px;color:var(--muted);">
+          ⚠️ Thay đổi sẽ restart scanner và sniffer. MQTT bridge tạm dừng trong lúc restart.
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🔍 Detect Ports</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+          Kiểm tra USB-RS485 adapter đã được nhận chưa:
+        </div>
+        <button class="btn btn-sm btn-success" onclick="detectPorts()">🔍 Scan Ports</button>
+        <div id="portList" style="margin-top:10px;font-family:monospace;font-size:12px;color:var(--text);"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-title">📊 Current Status</div>
+        <div id="currentConfig" style="font-size:12px;color:var(--muted);line-height:1.9;">
+          Loading…
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">📖 Quick Reference</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;">
+          <p><b style="color:var(--text)">Baud rate phổ biến:</b></p>
+          <p>• CPO-RL4, CPO-PC6A: <code>38400</code> (default)</p>
+          <p>• Thiết bị cũ: <code>9600</code> hoặc <code>19200</code></p>
+          <p>• Thiết bị mới cao cấp: <code>76800</code></p>
+          <br>
+          <p><b style="color:var(--text)">Node address:</b></p>
+          <p>• Pi (sniffer): <code>127</code> (passive, không cần token)</p>
+          <p>• Pi (scanner): <code>127</code> (master, tham gia token ring)</p>
+          <p>• Đừng dùng address đã có trên bus!</p>
+          <br>
+          <p><b style="color:var(--text)">Kiểm tra kết nối:</b></p>
+          <p>• <code>ls /dev/ttyUSB*</code></p>
+          <p>• <code>sudo dmesg | grep USB</code></p>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
-const state = { nodes: {}, stats: {}, selected: null };
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = { nodes:{}, selected:null };
 let ws = null;
 
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    const ids=['monitor','sniffer','filetransfer','config'];
+    t.classList.toggle('active', ids[i]===name);
+  });
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  if(name==='sniffer') loadSniffer();
+  if(name==='config')  loadCurrentConfig();
+}
+
 // ── WebSocket ─────────────────────────────────────────────────────────────────
-function connect() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+function connect(){
+  const proto = location.protocol==='https:'?'wss':'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => document.getElementById('wsStatus').classList.add('ok');
-  ws.onclose = () => { document.getElementById('wsStatus').classList.remove('ok'); setTimeout(connect, 3000); };
-  ws.onmessage = e => {
+  ws.onopen = ()=> document.getElementById('wsStatus').classList.add('ok');
+  ws.onclose = ()=>{ document.getElementById('wsStatus').classList.remove('ok'); setTimeout(connect,3000); };
+  ws.onmessage = e=>{
     const msg = JSON.parse(e.data);
-    if (msg.type === 'init') {
-      (msg.nodes || []).forEach(n => state.nodes[n.address] = n);
-      if (msg.stats) updateStats(msg.stats);
-    } else if (msg.type === 'online' || msg.type === 'offline') {
-      const n = state.nodes[msg.node_id] || { address: msg.node_id };
-      n.online = msg.type === 'online';
-      n.name   = msg.name || n.name || '';
-      n.rtt_ms = msg.rtt_ms ?? n.rtt_ms;
-      n.last_seen = msg.timestamp;
-      state.nodes[msg.node_id] = n;
+    if(msg.type==='init'){
+      (msg.nodes||[]).forEach(n=>state.nodes[n.address]=n);
+      if(msg.stats) updateStats(msg.stats);
+    } else if(msg.type==='online'||msg.type==='offline'){
+      const n = state.nodes[msg.node_id]||{address:msg.node_id};
+      n.online = msg.type==='online';
+      if(msg.name) n.name=msg.name;
+      if(msg.rtt_ms!=null) n.rtt_ms=msg.rtt_ms;
+      state.nodes[msg.node_id]=n;
       addEvent(msg);
-    } else if (msg.type === 'stats') {
+    } else if(msg.type==='stats'){
       updateStats(msg);
+    } else if(msg.type==='pathology'){
+      addPathologyEvent(msg);
     }
     renderGrid();
-    if (state.selected !== null) renderDetail(state.selected);
   };
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
-function updateStats(s) {
-  Object.assign(state.stats, s);
-  document.getElementById('sOnline').textContent  = s.online_nodes  ?? '—';
-  document.getElementById('sOffline').textContent = s.offline_nodes ?? '—';
-  document.getElementById('sTotal').textContent   = s.total_nodes   ?? '—';
-  if (s.scan_count !== undefined) document.getElementById('sScan').textContent = s.scan_count;
-  document.getElementById('scanBadge').textContent = `Last scan: ${s.scan_count ?? 0} cycles`;
+function updateStats(s){
+  document.getElementById('sOnline').textContent  = s.online_nodes ??'—';
+  document.getElementById('sOffline').textContent = s.offline_nodes??'—';
+  document.getElementById('sTotal').textContent   = s.total_nodes  ??'—';
+  if(s.scan_count!=null) document.getElementById('sScan').textContent=s.scan_count;
 }
 
 // ── Grid ──────────────────────────────────────────────────────────────────────
-function renderGrid() {
-  const grid = document.getElementById('nodeGrid');
-  grid.innerHTML = '';
-  for (let i = 0; i < 128; i++) {
-    const n = state.nodes[i];
-    const cls = !n ? '' : n.online ? 'online' : 'offline';
-    const sel = state.selected === i ? 'selected' : '';
-    const cell = document.createElement('div');
-    cell.className = `cell ${cls} ${sel}`;
-    cell.textContent = i;
-    cell.title = n ? `Node ${i}: ${n.name || 'unknown'}` : `Node ${i}`;
-    cell.onclick = () => { state.selected = state.selected === i ? null : i; renderGrid(); renderDetail(i); };
-    grid.appendChild(cell);
+function renderGrid(){
+  const g=document.getElementById('nodeGrid');
+  g.innerHTML='';
+  for(let i=0;i<128;i++){
+    const n=state.nodes[i];
+    const c=!n?'':n.online?'online':'offline';
+    const sel=state.selected===i?'selected':'';
+    const d=document.createElement('div');
+    d.className=`cell ${c} ${sel}`;
+    d.textContent=i;
+    d.title=n?`${i}: ${n.name||'?'}`:String(i);
+    d.onclick=()=>{state.selected=state.selected===i?null:i;renderGrid();renderDetail(i);};
+    g.appendChild(d);
   }
 }
 
-// ── Detail Panel ──────────────────────────────────────────────────────────────
-function renderDetail(nodeId) {
-  const panel = document.getElementById('detailCard');
-  const n = state.nodes[nodeId];
-  if (!n) {
-    panel.innerHTML = `<div class="card-title">Node ${nodeId}</div><div style="color:var(--muted);font-size:12px;">No data yet</div>`;
-    return;
-  }
-  const status = n.online ? `<span style="color:var(--green)">● Online</span>` : `<span style="color:var(--red)">● Offline</span>`;
-  const rttPct = Math.min(100, (n.rtt_ms || 0) / 5);  // 500ms = 100%
-  const rows = [
-    ['Address', n.address],
-    ['Name', n.name || '—'],
-    ['Vendor', n.vendor || '—'],
-    ['Model', n.model || '—'],
-    ['Firmware', n.firmware || '—'],
-    ['State', n.system_status || '—'],
-    ['RTT', n.rtt_ms >= 0 ? `${n.rtt_ms}ms` : '—'],
-    ['Objects', n.object_count ?? '—'],
-    ['Errors', n.read_errors ?? 0],
-  ].map(([k,v]) => `<div class="detail-row"><span class="detail-key">${k}</span><span class="detail-val">${v}</span></div>`).join('');
-
-  panel.innerHTML = `
-    <div class="card-title">Node ${nodeId} — ${status}</div>
-    <div class="detail">${rows}</div>
-    ${n.rtt_ms >= 0 ? `
-    <div class="rtt-bar-wrap">
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:4px;">
-        <span>RTT</span><span>${n.rtt_ms}ms</span>
-      </div>
-      <div class="rtt-bar-bg"><div class="rtt-bar" style="width:${rttPct}%"></div></div>
-    </div>` : ''}
-  `;
+function renderDetail(id){
+  const p=document.getElementById('detailCard');
+  const n=state.nodes[id];
+  if(!n){p.innerHTML=`<div class="card-title">Node ${id}</div><div style="font-size:12px;color:var(--muted)">No data</div>`;return;}
+  const rows=[['Address',n.address],['Name',n.name||'—'],['Vendor',n.vendor||'—'],
+    ['Model',n.model||'—'],['RTT',n.rtt_ms>=0?`${n.rtt_ms}ms`:'—'],
+    ['Status',n.online?'🟢 Online':'🔴 Offline']];
+  p.innerHTML=`<div class="card-title">Node ${id}</div>`+
+    rows.map(([k,v])=>`<div class="detail-row"><span class="detail-key">${k}</span><span>${v}</span></div>`).join('');
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
-function addEvent(ev) {
-  const feed = document.getElementById('eventFeed');
-  const icon = ev.type === 'online' ? '🟢' : ev.type === 'offline' ? '🔴' : 'ℹ️';
-  const time = new Date(ev.timestamp * 1000).toLocaleTimeString();
-  const msg  = ev.type === 'online'
-    ? `Node <b>${ev.node_id}</b> online${ev.name ? ` — ${ev.name}` : ''}${ev.rtt_ms ? ` (${ev.rtt_ms}ms)` : ''}`
-    : `Node <b>${ev.node_id}</b> offline`;
-
-  const el = document.createElement('div');
-  el.className = 'ev';
-  el.innerHTML = `<span class="ev-icon">${icon}</span>
-    <div><div class="ev-msg">${msg}</div><div class="ev-time">${time}</div></div>`;
-  feed.prepend(el);
-  while (feed.children.length > 80) feed.removeChild(feed.lastChild);
+function addEvent(ev){
+  const feed=document.getElementById('eventFeed');
+  const icon=ev.type==='online'?'🟢':'🔴';
+  const time=new Date(ev.timestamp*1000).toLocaleTimeString();
+  const el=document.createElement('div');el.className='ev';
+  el.innerHTML=`<span>${icon}</span><div><div style="font-size:11px">Node <b>${ev.node_id}</b> ${ev.type}${ev.name?' — '+ev.name:''}</div><div class="ev-time">${time}</div></div>`;
+  feed.prepend(el);while(feed.children.length>60)feed.removeChild(feed.lastChild);
 }
 
-// ── Scan trigger ──────────────────────────────────────────────────────────────
-async function triggerScan() {
-  const btn = document.getElementById('scanBtn');
-  btn.disabled = true; btn.textContent = '⟳ Scanning…';
-  try {
-    await fetch('/api/scan', { method: 'POST' });
-    btn.textContent = '✓ Triggered';
-  } catch { btn.textContent = '✗ Failed'; }
-  setTimeout(() => { btn.disabled = false; btn.textContent = '⟳ Scan Now'; }, 3000);
+function addPathologyEvent(ev){
+  const feed=document.getElementById('eventFeed');
+  const icons={'critical':'🔴','warning':'🟡','info':'🔵'};
+  const el=document.createElement('div');el.className='ev';
+  el.innerHTML=`<span>${icons[ev.severity]||'•'}</span><div><div style="font-size:11px"><b>[${ev.code}]</b> ${ev.description}</div><div class="ev-time">${new Date().toLocaleTimeString()}</div></div>`;
+  feed.prepend(el);while(feed.children.length>60)feed.removeChild(feed.lastChild);
+}
+
+// ── Sniffer Tab ───────────────────────────────────────────────────────────────
+async function loadSniffer(){
+  try{
+    const [rpt, frames] = await Promise.all([
+      fetch('/api/sniffer/report').then(r=>r.json()),
+      fetch('/api/sniffer/frames?limit=20').then(r=>r.json()),
+    ]);
+    renderSnifferStats(rpt);
+    renderPathologies(rpt.pathologies||[]);
+    renderNodeStats(rpt.nodes||[]);
+    renderFrameLog(frames);
+  }catch(e){console.warn('Sniffer fetch failed',e);}
+}
+
+function renderSnifferStats(r){
+  if(!r||r.enabled===false) return;
+  document.getElementById('sFPS').textContent = r.frames_per_s??'—';
+  document.getElementById('sBadPct').textContent = (r.bad_frame_pct??'—')+'%';
+  document.getElementById('sSilence').textContent = r.max_silence_ms??'—';
+  const util = r.bus_utilization_pct||0;
+  document.getElementById('utilPct').textContent = util+'%';
+  const circ = document.getElementById('utilCircle');
+  const c = 2*Math.PI*32;
+  circ.setAttribute('stroke-dashoffset', c*(1-util/100));
+  circ.setAttribute('stroke', util>90?'var(--red)':util>70?'var(--yellow)':'var(--accent)');
+}
+
+function renderPathologies(list){
+  const el=document.getElementById('pathList');
+  if(!list.length){el.innerHTML='<div style="color:var(--green);font-size:12px;">✅ No issues detected</div>';return;}
+  el.innerHTML=list.map(p=>`
+    <div class="path-item ${p.severity}">
+      <span style="font-size:18px">${{critical:'🔴',warning:'🟡',info:'🔵'}[p.severity]||'•'}</span>
+      <div><div class="path-code">${p.code}</div>
+      <div class="path-desc">${p.description}</div>
+      ${p.detail?`<div class="path-detail">${p.detail}</div>`:''}
+      ${p.nodes_involved?.length?`<div class="path-detail">Nodes: ${p.nodes_involved.join(', ')}</div>`:''}
+      </div>
+    </div>`).join('');
+}
+
+function renderNodeStats(nodes){
+  const tb=document.getElementById('nodeStatsBody');
+  tb.innerHTML=nodes.map(n=>{
+    const fpsCls=n.frames_per_s>40?'fps-crit':n.frames_per_s>20?'fps-high':'';
+    const ids=(n.device_ids||[]).join(',')||'—';
+    return `<tr>
+      <td><b>${n.mac}</b></td>
+      <td class="${fpsCls}">${n.frames_per_s}</td>
+      <td>${(n.bytes_per_s/1000*8).toFixed(1)}</td>
+      <td>${n.bad_crc}${n.bad_crc_pct>5?` <span style="color:var(--red)">(${n.bad_crc_pct}%)</span>`:''}</td>
+      <td>${n.token_passes??'—'}</td>
+      <td>${n.token_avg_ms!=null?n.token_avg_ms+'ms':'—'}</td>
+      <td style="font-size:11px;font-family:monospace">${ids}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderFrameLog(frames){
+  const tb=document.getElementById('frameLogBody');
+  tb.innerHTML=frames.slice(-20).reverse().map(f=>`<tr>
+    <td style="font-family:monospace;font-size:10px">${f.ts.toFixed(3)}</td>
+    <td>${f.type}</td>
+    <td>${f.src}</td>
+    <td>${f.dst}</td>
+    <td>${f.len}</td>
+    <td>${f.valid?'✓':'<span style="color:var(--red)">✗</span>'}</td>
+  </tr>`).join('');
+}
+
+// ── File Transfer ─────────────────────────────────────────────────────────────
+async function startUpload(){
+  const addr=document.getElementById('xAddr').value.trim();
+  const inst=document.getElementById('xFileInst').value;
+  const fileInput=document.getElementById('xFile');
+  const reload=document.getElementById('xReload').checked;
+  const devInst=document.getElementById('xDevInst').value;
+
+  if(!addr||!fileInput.files.length){
+    document.getElementById('uploadStatus').textContent='⚠️ Fill address and select file';
+    return;
+  }
+
+  const btn=document.getElementById('uploadBtn');
+  btn.disabled=true;
+  document.getElementById('xferBarBg').style.display='block';
+  document.getElementById('xferLog').style.display='block';
+  document.getElementById('xferLog').textContent='';
+  logXfer('upload', `Starting upload → ${addr} / File:${inst}`);
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+  formData.append('address', addr);
+  formData.append('file_instance', inst);
+  if(reload) formData.append('reload', 'true');
+  if(devInst) formData.append('device_instance', devInst);
+
+  try{
+    const res = await fetch('/api/file/upload', {method:'POST', body:formData});
+    const d = await res.json();
+    document.getElementById('xferBar').style.width = d.pct+'%';
+    if(d.status==='done'){
+      logXfer('upload',`✅ Done: ${d.bytes_transferred} bytes in ${d.elapsed_s}s (${d.kbps} KB/s)`);
+      document.getElementById('uploadStatus').textContent='✅ Upload complete';
+    } else {
+      logXfer('upload',`❌ Failed: ${d.error}`);
+      document.getElementById('uploadStatus').textContent='❌ '+d.error;
+    }
+  }catch(e){
+    logXfer('upload','❌ Network error: '+e);
+    document.getElementById('uploadStatus').textContent='❌ Error';
+  }
+  btn.disabled=false;
+}
+
+async function startDownload(){
+  const addr=document.getElementById('dnAddr').value.trim();
+  const inst=document.getElementById('dnFileInst').value;
+  const fname=document.getElementById('dnFilename').value.trim()||'download.app';
+  if(!addr){alert('Enter device address');return;}
+
+  document.getElementById('downloadBtn').disabled=true;
+  document.getElementById('dnBarBg').style.display='block';
+  document.getElementById('dnLog').style.display='block';
+  logXfer('dn',`Starting download ← ${addr}/File:${inst}`);
+
+  try{
+    const res = await fetch(`/api/file/download?address=${encodeURIComponent(addr)}&file_instance=${inst}&filename=${encodeURIComponent(fname)}`);
+    if(res.ok){
+      const blob=await res.blob();
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement('a');a.href=url;a.download=fname;a.click();
+      URL.revokeObjectURL(url);
+      document.getElementById('dnBar').style.width='100%';
+      logXfer('dn',`✅ Downloaded ${blob.size} bytes → ${fname}`);
+    } else {
+      const d=await res.json();
+      logXfer('dn','❌ '+d.detail);
+    }
+  }catch(e){ logXfer('dn','❌ '+e); }
+  document.getElementById('downloadBtn').disabled=false;
+}
+
+function logXfer(which, msg){
+  const id=which==='upload'?'xferLog':'dnLog';
+  const el=document.getElementById(id);
+  el.textContent+=(el.textContent?'\n':'')+new Date().toLocaleTimeString()+' '+msg;
+  el.scrollTop=el.scrollHeight;
+}
+
+// ── Network Config ────────────────────────────────────────────────────────────
+async function loadCurrentConfig(){
+  try{
+    const st=await fetch('/api/stats').then(r=>r.json());
+    document.getElementById('currentConfig').innerHTML=`
+      <div class="detail-row"><span class="detail-key">Total nodes</span><span>${st.total_nodes??'—'}</span></div>
+      <div class="detail-row"><span class="detail-key">Online</span><span class="green">${st.online_nodes??'—'}</span></div>
+      <div class="detail-row"><span class="detail-key">Scans done</span><span>${st.scan_count??'—'}</span></div>
+    `;
+  }catch(e){}
+}
+
+async function saveConfig(){
+  const cfg={
+    serial:{port:document.getElementById('cfgPort').value,
+      baudrate:parseInt(document.getElementById('cfgBaud').value),
+      node_address:parseInt(document.getElementById('cfgNode').value)},
+    scan:{interval_seconds:parseInt(document.getElementById('cfgInterval').value),
+      node_range:[parseInt(document.getElementById('cfgNodeMin').value),
+                  parseInt(document.getElementById('cfgNodeMax').value)],
+      timeout_per_node:parseFloat(document.getElementById('cfgTimeout').value)},
+  };
+  try{
+    await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    document.getElementById('cfgStatus').textContent='✅ Saved — restarting …';
+    document.getElementById('networkLabel').textContent=`${cfg.serial.port} @ ${cfg.serial.baudrate}`;
+    setTimeout(()=>{document.getElementById('cfgStatus').textContent='';},4000);
+  }catch(e){document.getElementById('cfgStatus').textContent='❌ '+e;}
+}
+
+async function detectPorts(){
+  try{
+    const r=await fetch('/api/serial-ports').then(r=>r.json());
+    const el=document.getElementById('portList');
+    if(r.ports?.length){
+      el.innerHTML=r.ports.map(p=>`<div style="padding:4px 0;border-bottom:1px solid var(--border)">
+        ${p.port} <span style="color:var(--muted)">— ${p.description||'USB-Serial'}</span>
+        <button class="btn btn-sm" style="margin-left:8px;padding:2px 8px"
+          onclick="document.getElementById('cfgPort').value='${p.port}'">Use</button>
+      </div>`).join('');
+    } else {
+      el.innerHTML='<span style="color:var(--red)">No serial ports found</span>';
+    }
+  }catch(e){ document.getElementById('portList').textContent='Error: '+e; }
+}
+
+async function triggerScan(){
+  await fetch('/api/scan',{method:'POST'}).catch(()=>{});
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-async function init() {
-  // Load initial data via REST
-  try {
-    const [nodesR, statsR, eventsR] = await Promise.all([
-      fetch('/api/nodes').then(r => r.json()),
-      fetch('/api/stats').then(r => r.json()),
-      fetch('/api/events?limit=20').then(r => r.json()),
+async function init(){
+  try{
+    const [nodes,stats,events]=await Promise.all([
+      fetch('/api/nodes').then(r=>r.json()),
+      fetch('/api/stats').then(r=>r.json()),
+      fetch('/api/events?limit=15').then(r=>r.json()),
     ]);
-    nodesR.forEach(n => state.nodes[n.address] = n);
-    updateStats(statsR);
-    eventsR.reverse().forEach(ev => addEvent(ev));
-  } catch(e) { console.warn('Init fetch failed', e); }
+    nodes.forEach(n=>state.nodes[n.address]=n);
+    updateStats(stats);
+    events.reverse().forEach(ev=>addEvent(ev));
+  }catch(e){ console.warn('Init',e); }
   renderGrid();
   connect();
 }
-
 init();
 </script>
 </body>
