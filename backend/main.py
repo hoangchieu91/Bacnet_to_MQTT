@@ -267,6 +267,96 @@ async def get_health():
     return get_system_health()
 
 
+@app.get("/api/system/services")
+async def get_system_services():
+    """Return status of system services, ports, and key connections."""
+    import subprocess, socket as _socket, json as _json, shutil
+
+    def check_service(name: str) -> dict:
+        try:
+            r = subprocess.run(
+                ["systemctl", "is-active", name],
+                capture_output=True, text=True, timeout=3,
+            )
+            status = r.stdout.strip()
+            return {"name": name, "status": status, "ok": status == "active"}
+        except Exception as e:
+            return {"name": name, "status": "error", "ok": False, "error": str(e)}
+
+    def check_tcp_port(host: str, port: int, label: str) -> dict:
+        try:
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            s.settimeout(0.5)
+            r = s.connect_ex((host, port))
+            s.close()
+            return {"label": label, "port": port, "host": host, "ok": r == 0,
+                    "status": "open" if r == 0 else "closed"}
+        except Exception as e:
+            return {"label": label, "port": port, "host": host, "ok": False, "status": "error"}
+
+    def check_udp_bind(port: int, label: str) -> dict:
+        """Check if a UDP port is bound (e.g., BACnet)."""
+        try:
+            s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+            s.settimeout(0.3)
+            s.bind(("0.0.0.0", port))
+            s.close()
+            # If we could bind, nobody is using it → BAD for BACnet
+            return {"label": label, "port": port, "ok": False, "status": "unbound",
+                    "note": "Port free — BACnet not running?"}
+        except OSError:
+            # Already bound by BACnet stack → GOOD
+            return {"label": label, "port": port, "ok": True, "status": "bound",
+                    "note": "BACnet stack has port"}
+
+    # ── Services ──
+    services = [
+        check_service("bacnet-gateway"),
+        check_service("nginx"),
+        check_service("mosquitto"),
+    ]
+    # Add mqtt if mosquitto not found
+    if not any(s["ok"] for s in services if s["name"] == "mosquitto"):
+        services.append(check_service("mqtt"))
+
+    # ── TCP Ports ──
+    ports = [
+        check_tcp_port("127.0.0.1", 8000, "API Backend (uvicorn)"),
+        check_tcp_port("127.0.0.1", 8080, "Web UI (nginx)"),
+        check_tcp_port("127.0.0.1", 1883, "MQTT Broker (local)"),
+    ]
+
+    # MQTT broker external — try via config
+    try:
+        mqtt_url = config_manager.runtime_config.get("mqtt", {}).get("url", "")
+        if mqtt_url:
+            import re
+            m = re.match(r"mqtt://([^:/]+):?(\d+)?", mqtt_url)
+            if m:
+                host, port = m.group(1), int(m.group(2) or 1883)
+                ports.append(check_tcp_port(host, port, f"MQTT Broker ({host})"))
+    except Exception:
+        pass
+
+    # ── BACnet UDP ──
+    bacnet_port = 47808
+    udp_status = check_udp_bind(bacnet_port, "BACnet/IP (UDP)")
+
+    # ── Gateway process ──
+    gw_status = {"ok": False, "status": "stopped"}
+    if gateway_engine:
+        gw_running = getattr(gateway_engine, "_running", False)
+        gw_status = {"ok": gw_running, "status": "running" if gw_running else "stopped"}
+
+    return {
+        "services": services,
+        "ports": ports,
+        "bacnet_udp": udp_status,
+        "gateway": gw_status,
+    }
+
+
+
 @app.get("/api/devices/health")
 async def get_devices_health():
     """Return bulk health status of all known BACnet devices.
