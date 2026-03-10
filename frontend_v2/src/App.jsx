@@ -168,21 +168,23 @@ function App() {
 
         {/* Main content */}
         <main
-          className="min-h-screen overflow-x-hidden transition-all duration-300
-                     pb-20 md:pb-0"  // pb-20 for mobile bottom nav space
-          style={{
-            // On md+: offset by sidebar width. On mobile: full width
-            marginLeft: `var(--sidebar-width, 0)`,
-          }}
+          className="min-h-screen overflow-x-hidden transition-all duration-300 pb-20 md:pb-0"
+          style={(() => {
+            // On mobile (< 768px): full width, no sidebar offset
+            if (typeof window !== 'undefined' && window.innerWidth < 768) {
+              return {};
+            }
+            // On desktop: offset by sidebar width exactly like before
+            const sw = sidebarCollapsed ? 64 : 220;
+            return {
+              marginLeft: `${sw}px`,
+              width: `calc(100vw - ${sw}px)`,
+            };
+          })()}
         >
-          {/* CSS custom property trick for responsive sidebar offset */}
+
+          {/* slideUp animation for More drawer */}
           <style>{`
-            @media (min-width: 768px) {
-              :root { --sidebar-width: ${sidebarCollapsed ? '64px' : '220px'}; }
-            }
-            @media (max-width: 767px) {
-              :root { --sidebar-width: 0px; }
-            }
             @keyframes slideUp {
               from { transform: translateY(20px); opacity: 0; }
               to   { transform: translateY(0);    opacity: 1; }
