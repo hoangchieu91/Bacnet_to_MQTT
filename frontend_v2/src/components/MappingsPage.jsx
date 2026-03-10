@@ -281,9 +281,36 @@ function CloneModal({ count, onClose, groups, selectedMappings, onDone }) {
 function TypeBadge({ value }) {
   return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide bg-info/15 text-info">{TYPE_MAP[value] || value}</span>;
 }
-function ModeBadge({ value }) {
-  const isCov = value === 'cov';
-  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${isCov ? 'bg-success/15 text-success' : 'bg-accent-primary/15 text-accent-primary'}`}>{isCov ? '⚡ COV' : '🔄 Poll'}</span>;
+function ModeToggle({ value, mappingId }) {
+  const [mode, setMode] = React.useState(value || 'poll');
+  const [loading, setLoading] = React.useState(false);
+  const { updateMapping } = useMappingStore();
+
+  const toggle = async (e) => {
+    e.stopPropagation();
+    const next = mode === 'poll' ? 'cov' : 'poll';
+    setLoading(true);
+    try {
+      await updateMapping(mappingId, { read_mode: next });
+      setMode(next);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const isCov = mode === 'cov';
+  return (
+    <button
+      onClick={toggle}
+      disabled={loading}
+      title={isCov ? 'COV — Device pushes on change. Click to switch to Poll' : 'Poll — Gateway reads periodically. Click to switch to COV'}
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold cursor-pointer transition-all hover:scale-105 active:scale-95 disabled:opacity-60 ${
+        isCov ? 'bg-success/20 text-success hover:bg-success/30 border border-success/30' : 'bg-accent-primary/15 text-accent-primary hover:bg-accent-primary/25 border border-accent-primary/20'
+      }`}
+    >
+      {loading ? '…' : isCov ? '⚡ COV' : '🔄 Poll'}
+    </button>
+  );
 }
 function ValueCell({ data }) {
   const val = data?.last_value;
@@ -336,7 +363,7 @@ export function MappingsPage() {
     { field: 'device_id', headerName: 'Device', width: 90, editable: true, cellClass: 'text-text-secondary' },
     { field: 'object_instance', headerName: 'Instance', width: 100 },
     { headerName: 'Value', width: 130, cellRenderer: p => <ValueCell data={p.data} />, valueGetter: p => p.data?.last_value },
-    { field: 'read_mode', headerName: 'Mode', width: 100, cellRenderer: p => <ModeBadge value={p.value || 'poll'} />, editable: true, cellEditor: 'agSelectCellEditor', cellEditorParams: { values: ['poll', 'cov'] } },
+    { field: 'read_mode', headerName: 'Mode', width: 110, cellRenderer: p => <ModeToggle value={p.value || 'poll'} mappingId={p.data?.id} />, suppressCellFlash: true },
     { field: 'poll_interval', headerName: 'Interval', width: 90, editable: true, valueFormatter: p => `${p.value}s`, cellClass: 'text-text-secondary' },
     { field: 'group', headerName: 'Group', width: 120, editable: true, cellClass: 'text-accent-secondary font-medium' },
     { field: 'mqtt_topic', headerName: 'MQTT Topic', flex: 1, minWidth: 150, editable: true, cellClass: 'text-text-muted text-xs' },
