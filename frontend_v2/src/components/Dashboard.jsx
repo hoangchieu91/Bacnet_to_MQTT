@@ -100,7 +100,7 @@ const SEV_META = {
   info:     { dot: 'bg-info', color: 'text-info' },
 };
 
-function EventRow({ ev }) {
+function EventRow({ ev, deviceName }) {
   const meta = EVENT_META[ev.event_type] || { dot: 'bg-info', bg: 'bg-bg-input/30 border-border/30', label: ev.event_type };
   const sevMeta = SEV_META[ev.severity] || SEV_META.info;
   const DotColor = ev.event_type === 'device_offline' ? 'bg-error'
@@ -119,7 +119,12 @@ function EventRow({ ev }) {
           )}
         </div>
         <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-          {ev.device_id && <span className="text-[10px] text-text-muted">Dev {ev.device_id}</span>}
+          {ev.device_id && (
+            <span className="text-[10px] text-text-muted">
+              Dev {ev.device_id}
+              {deviceName && <span className="text-success/80 font-semibold ml-1">· {deviceName}</span>}
+            </span>
+          )}
           {ev.data?.address && <span className="text-[10px] text-accent-primary font-mono">{ev.data.address}</span>}
           {ev.data?.network && <span className="text-[10px] text-info/70">{ev.data.network}</span>}
           <span className="text-[10px] text-text-muted ml-auto">{fmtTime(ev.timestamp)}</span>
@@ -151,6 +156,15 @@ const SEVERITIES = [
 ];
 
 function EventsPanel({ devices }) {
+  // Build device name lookup map: device_id → display name
+  const deviceNameMap = React.useMemo(() => {
+    const m = {};
+    devices.forEach(d => {
+      const name = d.device_name || d.name || '';
+      if (name) m[d.device_id] = name;
+    });
+    return m;
+  }, [devices]);
   const [events, setEvents] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -262,7 +276,7 @@ function EventsPanel({ devices }) {
           <div className="text-xs text-text-muted text-center py-8">Loading…</div>
         ) : events.length === 0 ? (
           <div className="text-xs text-text-muted text-center py-8">No events found for this filter</div>
-        ) : events.map(ev => <EventRow key={ev.id} ev={ev} />)}
+        ) : events.map(ev => <EventRow key={ev.id} ev={ev} deviceName={deviceNameMap[ev.device_id]} />)}
       </div>
 
       {/* Pagination */}
