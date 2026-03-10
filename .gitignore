@@ -6,9 +6,15 @@ __pycache__/
 venv/
 .venv/
 
-# Data
+# Data & secrets
 data/*.db
 config/runtime_config.json
+docs/*.ovpn
+
+# Frontend build artifacts
+frontend_v2/dist/
+frontend_v2/node_modules/
+node_modules/
 
 # IDE
 .vscode/
@@ -20,4 +26,3 @@ Thumbs.db
 
 # Gemini
 .gemini/
-docs/*.ovpn
