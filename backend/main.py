@@ -628,11 +628,12 @@ async def get_events(
     params.extend([limit, offset])
     rows = history_store._conn.execute(sql, params).fetchall()
 
+    import json as _json
     events = [
         {
             "id": r[0], "timestamp": r[1], "event_type": r[2],
             "device_id": r[3], "mapping_id": r[4], "severity": r[5],
-            "message": r[6], "data": json.loads(r[7]) if r[7] else None,
+            "message": r[6], "data": _json.loads(r[7]) if r[7] else None,
         }
         for r in rows
     ]
