@@ -588,17 +588,93 @@ async def get_events(
     event_type: str | None = None,
     device_id: int | None = None,
     severity: str | None = None,
-    limit: int = 100,
+    from_ts: str | None = None,   # ISO8601 start time
+    to_ts: str | None = None,     # ISO8601 end time
+    search: str | None = None,    # substring search in message
+    limit: int = 200,
     offset: int = 0,
 ):
     """Query event log with optional filters."""
     if not history_store:
         return {"events": [], "total": 0}
-    events = history_store.query_events(
-        event_type=event_type, device_id=device_id,
-        severity=severity, limit=limit, offset=offset,
-    )
-    return {"events": events}
+
+    # Extended query with from_ts, to_ts, search
+    if not history_store._conn:
+        return {"events": [], "total": 0}
+
+    sql = """SELECT id, timestamp, event_type, device_id, mapping_id,
+                    severity, message, data_json
+             FROM event_log WHERE 1=1"""
+    params: list = []
+    if event_type:
+        sql += " AND event_type = ?"; params.append(event_type)
+    if device_id is not None:
+        sql += " AND device_id = ?"; params.append(device_id)
+    if severity:
+        sql += " AND severity = ?"; params.append(severity)
+    if from_ts:
+        sql += " AND timestamp >= ?"; params.append(from_ts)
+    if to_ts:
+        sql += " AND timestamp <= ?"; params.append(to_ts)
+    if search:
+        sql += " AND message LIKE ?"; params.append(f"%{search}%")
+
+    # Count total
+    count_sql = sql.replace("SELECT id, timestamp, event_type, device_id, mapping_id, severity, message, data_json", "SELECT COUNT(*)")
+    total = history_store._conn.execute(count_sql, params).fetchone()[0]
+
+    sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    rows = history_store._conn.execute(sql, params).fetchall()
+
+    events = [
+        {
+            "id": r[0], "timestamp": r[1], "event_type": r[2],
+            "device_id": r[3], "mapping_id": r[4], "severity": r[5],
+            "message": r[6], "data": json.loads(r[7]) if r[7] else None,
+        }
+        for r in rows
+    ]
+    return {"events": events, "total": total}
+
+
+@app.get("/api/events/online-chart")
+async def get_online_chart(hours: int = 24):
+    """Return hourly online/offline counts for the past N hours.
+    Used for the Dashboard stability chart.
+    """
+    if not history_store or not history_store._conn:
+        return {"series": []}
+
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=hours)
+
+    # Count device_online and device_offline events per hour slot
+    rows = history_store._conn.execute(
+        """SELECT strftime('%Y-%m-%dT%H:00:00', timestamp) as hour,
+                  event_type, COUNT(*) as cnt
+           FROM event_log
+           WHERE event_type IN ('device_online','device_offline')
+             AND timestamp >= ?
+           GROUP BY hour, event_type
+           ORDER BY hour ASC""",
+        (since.isoformat(),),
+    ).fetchall()
+
+    # Build hourly map
+    slots: dict = {}
+    for row in rows:
+        h, etype, cnt = row
+        if h not in slots:
+            slots[h] = {"time": h, "online": 0, "offline": 0}
+        if etype == "device_online":
+            slots[h]["online"] = cnt
+        else:
+            slots[h]["offline"] = cnt
+
+    return {"series": list(slots.values())}
+
 
 
 @app.get("/api/devices/{device_id}/offline-history")
