@@ -193,17 +193,42 @@ class GatewayEngine:
                     fail += 1
                     continue
 
-                # Build a closure that captures this mapping
-                def make_callback(m):
+                # Build closures capturing this mapping
+                def make_callbacks(m):
                     async def _cov_callback(value) -> None:
                         await self._on_cov_notification(m, value)
-                    return _cov_callback
+
+                    async def _cov_fallback() -> None:
+                        """Called when COV gives up — switch mapping back to poll."""
+                        logger.warning(
+                            "[COV] Auto-fallback: switching %s (mapping %s) to poll mode",
+                            m.label or m.id, m.id,
+                        )
+                        try:
+                            m.read_mode = "poll"
+                            await self._cm.update_mapping(m.id, {"read_mode": "poll"})
+                            # Log event to history
+                            if self._history:
+                                self._history.log_event(
+                                    "system",
+                                    f"[COV] Auto-fallback to poll: {m.label or m.id}",
+                                    device_id=m.device_id,
+                                    mapping_id=m.id,
+                                    severity="warning",
+                                )
+                        except Exception as e:
+                            logger.error("[COV] Fallback update failed for %s: %s", m.id, e)
+
+                    return _cov_callback, _cov_fallback
+
+                value_cb, fallback_cb = make_callbacks(mapping)
 
                 success = await self._bacnet.subscribe_cov(
                     address,
                     mapping.object_type,
                     mapping.object_instance,
-                    callback=make_callback(mapping),
+                    callback=value_cb,
+                    on_fallback=fallback_cb,
                 )
                 if success:
                     logger.info("[COV] ✓ %s (device %d, %s:%d)",
@@ -219,6 +244,7 @@ class GatewayEngine:
                 fail += 1
 
         logger.info("[COV] Init done: %d subscribed, %d failed/fallback", ok, fail)
+
 
     async def _on_cov_notification(self, mapping, value) -> None:
         """Handle a COV push notification from a BACnet device.

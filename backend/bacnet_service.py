@@ -483,8 +483,9 @@ class BacnetService:
     # If the device doesn't support COV (no response within 10s), we log a
     # warning and the caller must fall back to polling.
 
-    COV_LIFETIME = 300   # seconds; re-subscribe before expiry
-    COV_RENEW_EARLY = 30 # renew this many seconds before expiry
+    COV_LIFETIME = 300      # seconds; re-subscribe before expiry
+    COV_RENEW_EARLY = 30    # renew this many seconds before expiry
+    MAX_COV_FAILURES = 3    # consecutive failures before falling back to poll
 
     async def subscribe_cov(
         self,
@@ -493,15 +494,13 @@ class BacnetService:
         object_instance: int,
         callback,            # async callback(value)
         lifetime: int = 0,   # 0 → use COV_LIFETIME
+        on_fallback=None,    # async callback() called when COV gives up → caller should switch to poll
     ) -> bool:
         """Subscribe to True BACnet COV notifications for a single object.
 
-        Sends a SubscribeCOVRequest to the device and starts a background
-        asyncio.Task that receives UnconfirmedCOVNotification messages via
-        BAC0's `app.change_of_value()` context manager.
-
-        The task auto-renews the subscription before it expires.
-        Returns True if the subscription was started (i.e. device accepted).
+        If the device rejects or doesn't respond to COV requests MAX_COV_FAILURES
+        times in a row, `on_fallback()` is called so the caller can switch the
+        mapping back to read_mode='poll'.
         """
         if not self._connected or self._network is None:
             return False
@@ -516,7 +515,7 @@ class BacnetService:
         effective_lifetime = lifetime if lifetime > 0 else self.COV_LIFETIME
 
         task = asyncio.create_task(
-            self._cov_subscription_loop(key, address, ot, object_instance, callback, effective_lifetime),
+            self._cov_subscription_loop(key, address, ot, object_instance, callback, effective_lifetime, on_fallback),
             name=f"cov-{key}",
         )
         self._cov_tasks[key] = task
@@ -531,11 +530,12 @@ class BacnetService:
         object_instance: int,
         callback,
         lifetime: int,
+        on_fallback=None,   # called when giving up after MAX_COV_FAILURES
     ) -> None:
         """Long-running COV subscription task.
 
-        Loops indefinitely, re-subscribing before lifetime expires.
-        Exits when cancelled (via unsubscribe_cov).
+        Loops until unsubscribed or MAX_COV_FAILURES consecutive failures.
+        On repeated failure, calls on_fallback() so caller can switch to poll.
         """
         try:
             from BAC0.scripts.Lite import COVSubscription
@@ -544,6 +544,7 @@ class BacnetService:
             return
 
         obj_id = (object_type, object_instance)
+        consecutive_failures = 0
 
         while key in self._cov_callbacks:
             try:
@@ -552,13 +553,10 @@ class BacnetService:
                     objectID=obj_id,
                     lifetime=lifetime,
                     confirmed=False,     # Unconfirmed COV — lighter on network
-                    callback=None,       # We handle via scm.get_value() below
+                    callback=None,
                     BAC0App=self._network,
                 )
 
-                # run() internally uses app.change_of_value() which sends
-                # SubscribeCOVRequest and waits for UnconfirmedCOVNotification.
-                # We override with our own loop to intercept values.
                 app = self._network.this_application.app
                 renew_at = asyncio.get_event_loop().time() + lifetime - self.COV_RENEW_EARLY
 
@@ -570,6 +568,8 @@ class BacnetService:
                     sub.lifetime,
                 ) as scm:
                     logger.info("COV active: %s", key)
+                    consecutive_failures = 0   # subscription accepted → reset failure count
+
                     while key in self._cov_callbacks:
                         time_left = renew_at - asyncio.get_event_loop().time()
                         if time_left <= 0:
@@ -588,7 +588,6 @@ class BacnetService:
 
                             if incoming in done:
                                 prop_id, prop_val = incoming.result()
-                                # We only care about presentValue property
                                 pid_str = str(prop_id).lower()
                                 if "present" in pid_str or pid_str == "presentvalue":
                                     value = self._extract_cov_value(prop_val)
@@ -607,8 +606,35 @@ class BacnetService:
                 logger.info("COV subscription cancelled: %s", key)
                 return
             except Exception as exc:
-                logger.warning("COV subscription error (%s): %s — retrying in 30s", key, exc)
-                await asyncio.sleep(30)  # back-off before retry
+                consecutive_failures += 1
+                logger.warning(
+                    "COV subscription error (%s) [%d/%d]: %s",
+                    key, consecutive_failures, self.MAX_COV_FAILURES, exc
+                )
+
+                if consecutive_failures >= self.MAX_COV_FAILURES:
+                    logger.error(
+                        "COV giving up after %d failures for %s — falling back to poll",
+                        consecutive_failures, key,
+                    )
+                    # Clean up subscription entry
+                    self._cov_callbacks.pop(key, None)
+                    self._cov_tasks.pop(key, None)
+                    # Notify caller to switch mapping back to poll
+                    if on_fallback is not None:
+                        try:
+                            if asyncio.iscoroutinefunction(on_fallback):
+                                asyncio.create_task(on_fallback())
+                            else:
+                                on_fallback()
+                        except Exception as fe:
+                            logger.debug("COV fallback callback error: %s", fe)
+                    return
+
+                # Exponential-ish back-off: 30s, 60s, 90s...
+                wait = 30 * consecutive_failures
+                logger.info("COV retrying %s in %ds...", key, wait)
+                await asyncio.sleep(wait)
 
         logger.info("COV subscription loop ended: %s", key)
 
