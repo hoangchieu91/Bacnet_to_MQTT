@@ -15,4 +15,8 @@ sshpass -p "Admin@12345" rsync -az --delete dist/ \
   -e "ssh -o StrictHostKeyChecking=no" \
   "${REMOTE}:${REMOTE_DIST}/"
 
+echo "▶ Fixing NGINX read permissions..."
+sshpass -p "Admin@12345" ssh -o StrictHostKeyChecking=no "${REMOTE}" \
+  "echo 'Admin@12345' | sudo -S bash -c 'find ${REMOTE_DIST} -type d -exec chmod o+rx {} \\; && find ${REMOTE_DIST} -type f -exec chmod o+r {} \\;'"
+
 echo "✅ Frontend deployed — NGINX serves new files immediately, BACnet untouched"
