@@ -301,7 +301,8 @@ export function Dashboard() {
       const [st, hl, dv, ch] = await Promise.allSettled([
         fetch(`${API}/status`).then(r => r.json()),
         fetch(`${API}/health`).then(r => r.json()),
-        fetch(`${API}/devices`).then(r => r.json()),
+        fetch(`${API}/bacnet/devices`).then(r => r.json()),
+
         fetch(`${API}/events/online-chart?hours=${chartHours}`).then(r => r.json()),
       ]);
       if (st.status === 'fulfilled') setStatus(st.value);
