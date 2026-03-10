@@ -320,6 +320,16 @@ function ValueCell({ data }) {
     const isOn = (val === 'active' || val === 1 || String(val).toLowerCase() === 'active');
     return <span className={`font-bold ${isOn ? 'text-success' : 'text-error'}`}>{isOn ? (data.active_text || 'Active') : (data.inactive_text || 'Inactive')}</span>;
   }
+  if (ot.includes('multi') || ot.includes('multistate')) {
+    const idx = Number(val);
+    const label = (data.state_text && data.state_text[idx - 1]) || null;
+    return (
+      <span className="font-semibold">
+        <span className="text-info">{idx}</span>
+        {label && <span className="text-text-muted text-[10px] ml-1">— {label}</span>}
+      </span>
+    );
+  }
   return <span className="font-semibold">{String(val)}{data.units ? <span className="text-text-muted text-[10px] ml-1">{data.units}</span> : ''}</span>;
 }
 function EnabledCell({ value, data }) {
@@ -399,27 +409,65 @@ export function MappingsPage() {
     selectAll(rows.map(r => r.id));
   }, [selectAll]);
 
+  // ── CSV helpers ────────────────────────────────────────────────
+  const CSV_COLS = [
+    'id','label','device_id','object_type','object_instance',
+    'mqtt_topic','read_mode','poll_interval','group','enabled',
+    'units','description','active_text','inactive_text',
+  ];
+  const toCSV = (rows) => {
+    const esc = v => (v == null ? '' : String(v).includes(',') || String(v).includes('"') || String(v).includes('\n')
+      ? `"${String(v).replace(/"/g,'"""')}"` : String(v));
+    return [CSV_COLS.join(','), ...rows.map(r => CSV_COLS.map(c => esc(r[c])).join(','))].join('\n');
+  };
+  const fromCSV = (text) => {
+    const lines = text.trim().split('\n');
+    const header = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g,''));
+    return lines.slice(1).map(line => {
+      const vals = []; let cur = ''; let inQ = false;
+      for (const ch of line) {
+        if (ch === '"') { inQ = !inQ; } else if (ch === ',' && !inQ) { vals.push(cur); cur = ''; } else { cur += ch; }
+      }
+      vals.push(cur);
+      const obj = {};
+      header.forEach((h, i) => { obj[h] = vals[i]?.replace(/^"|"$/g,'').replace(/""/g,'"') ?? ''; });
+      // coerce types
+      if (obj.device_id) obj.device_id = Number(obj.device_id);
+      if (obj.object_instance) obj.object_instance = Number(obj.object_instance);
+      if (obj.poll_interval) obj.poll_interval = Number(obj.poll_interval);
+      if (obj.enabled !== undefined) obj.enabled = obj.enabled !== 'false';
+      return obj;
+    });
+  };
+
   const handleExport = useCallback(async () => {
     try {
       const data = await exportMappings();
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const rows = Array.isArray(data) ? data : (data.mappings || []);
+      const csv = toCSV(rows);
+      const blob = new Blob([csv], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = `mappings_${new Date().toISOString().slice(0, 10)}.json`; a.click();
+      a.href = url; a.download = `mappings_${new Date().toISOString().slice(0,10)}.csv`; a.click();
       URL.revokeObjectURL(url);
     } catch (e) { console.error(e); }
   }, [exportMappings]);
 
   const handleImport = useCallback(() => {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = '.json';
+    input.type = 'file'; input.accept = '.csv,.json';
     input.onchange = async (e) => {
       const file = e.target.files[0]; if (!file) return;
       try {
         const text = await file.text();
-        let data = JSON.parse(text);
-        if (Array.isArray(data)) data = { mappings: data };
-        await importMappings(data);
+        let payload;
+        if (file.name.endsWith('.json')) {
+          let d = JSON.parse(text);
+          payload = { mappings: Array.isArray(d) ? d : (d.mappings || []) };
+        } else {
+          payload = { mappings: fromCSV(text) };
+        }
+        await importMappings(payload);
         showToast('✅ Import successful');
       } catch (err) { alert('Import failed: ' + err.message); }
     };
@@ -470,7 +518,7 @@ export function MappingsPage() {
             <button onClick={fetchMappings} className="p-2 rounded-lg border border-border text-text-secondary hover:text-white hover:border-accent-primary transition-all" title="Refresh">
               <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
             </button>
-            <button onClick={handleExport} className="p-2 rounded-lg border border-border text-text-secondary hover:text-white hover:border-accent-primary transition-all" title="Export JSON">
+            <button onClick={handleExport} className="p-2 rounded-lg border border-border text-text-secondary hover:text-white hover:border-accent-primary transition-all" title="Export CSV">
               <Download size={16} />
             </button>
             <button onClick={handleImport} className="p-2 rounded-lg border border-border text-text-secondary hover:text-white hover:border-accent-primary transition-all" title="Import JSON">
