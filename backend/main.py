@@ -833,9 +833,22 @@ async def get_device_offline_history(device_id: int, limit: int = 200):
             })
         i += 1
 
+    # ── Current live status from in-memory device_status ──────────────────
+    current_online = None
+    current_last_seen = None
+    if gateway_engine:
+        ps = gateway_engine.get_device_status().get(device_id, {})
+        current_online = ps.get("online")          # True / False / None
+        current_last_seen = ps.get("last_seen")
+
     # Return most recent first
     incidents.reverse()
-    return {"incidents": incidents[:limit], "offline_count": len(incidents)}
+    return {
+        "incidents": incidents[:limit],
+        "offline_count": len(incidents),
+        "current_online": current_online,
+        "current_last_seen": current_last_seen,
+    }
 
 
 

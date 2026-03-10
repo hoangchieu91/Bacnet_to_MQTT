@@ -83,23 +83,23 @@ function DeviceModal({ device, onClose }) {
   });
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
-  const [history, setHistory] = useState(null); // null=not loaded, {incidents, offline_count}
+  const [history, setHistory] = useState(null); // null=not loaded
   const [histLoading, setHistLoading] = useState(false);
 
-  const loadHistory = async () => {
-    if (history !== null) return; // already loaded
+  const loadHistory = async (force = false) => {
+    if (history !== null && !force) return; // already loaded
     setHistLoading(true);
     try {
       const res = await fetch(`/api/devices/${device.device_id}/offline-history?limit=100`);
       const data = await res.json();
       setHistory(data);
-    } catch { setHistory({ incidents: [], offline_count: 0 }); }
+    } catch { setHistory({ incidents: [], offline_count: 0, current_online: null }); }
     setHistLoading(false);
   };
 
   const handleTabChange = (k) => {
     setTab(k); setResult(null);
-    if (k === 'history') loadHistory();
+    if (k === 'history') loadHistory(true); // always reload for fresh status
   };
 
   const handleAdd = async () => {
@@ -166,12 +166,15 @@ function DeviceModal({ device, onClose }) {
             <button key={k} onClick={() => handleTabChange(k)}
               className={`relative px-4 py-2.5 text-xs font-bold transition-colors whitespace-nowrap ${tab===k ? 'text-accent-primary border-b-2 border-accent-primary' : 'text-text-muted hover:text-white'}`}>
               {lbl}
-              {/* Badge: show offline count on History tab */}
-              {k === 'history' && history && history.offline_count > 0 && (
-                <span className="absolute -top-1 -right-1 bg-error text-white text-[8px] font-bold px-1 rounded-full min-w-[14px] text-center">
-                  {history.offline_count}
-                </span>
-              )}
+              {/* Badge: show only unresolved offline count on History tab */}
+              {k === 'history' && history && (() => {
+                const unresolved = (history.incidents || []).filter(i => !i.online_at).length;
+                return unresolved > 0 ? (
+                  <span className="absolute -top-1 -right-1 bg-error text-white text-[8px] font-bold px-1 rounded-full min-w-[14px] text-center">
+                    {unresolved}
+                  </span>
+                ) : null;
+              })()}
             </button>
           ))}
         </div>
@@ -263,6 +266,17 @@ function DeviceModal({ device, onClose }) {
                     </div>
                   </div>
 
+                  {/* Current status banner — shows when device is now online but has unresolved incidents */}
+                  {history.current_online === true && history.incidents.some(i => !i.online_at) && (
+                    <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-success/10 border border-success/30 text-xs text-success">
+                      <div className="w-2 h-2 rounded-full bg-success animate-pulse shrink-0" />
+                      Device hiện đang <b>Online</b>
+                      {history.current_last_seen && (
+                        <span className="text-text-muted ml-1">— Last seen {fmtTs(history.current_last_seen)}</span>
+                      )}
+                    </div>
+                  )}
+
                   {history.incidents.length === 0 ? (
                     <div className="text-center py-8 text-text-muted text-sm">
                       🟢 No offline incidents recorded — device has been stable.
@@ -287,7 +301,9 @@ function DeviceModal({ device, onClose }) {
                           <div>
                             {inc.online_at
                               ? <div className="text-success font-medium leading-tight">{fmtTs(inc.online_at)}</div>
-                              : <div className="text-error/70 italic">Still offline</div>
+                              : history.current_online === true
+                                ? <div className="text-success/70 italic text-[10px]">Now online ✓</div>
+                                : <div className="text-error/70 italic">Still offline</div>
                             }
                           </div>
                           {/* Duration */}
