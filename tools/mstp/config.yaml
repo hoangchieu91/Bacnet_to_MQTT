@@ -32,3 +32,8 @@ api:
   host: 0.0.0.0
   port: 8765                 # Dashboard accessible at http://<pi-ip>:8765
   debug: false
+
+sniffer:
+  enabled: true              # Run passive frame sniffer alongside scanner
+  diag_interval_s: 5        # Run diagnostics every N seconds
+  frame_log_size: 500        # Rolling frame log size

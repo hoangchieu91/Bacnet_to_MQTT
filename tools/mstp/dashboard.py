@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from health_monitor import HealthMonitor
 from bridge import MstpBridge
+from mstp_sniffer import MstpSniffer, Pathology
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ app = FastAPI(title="MS/TP Tools Dashboard", version="1.0.0")
 
 _monitor: HealthMonitor | None = None
 _bridge:  MstpBridge | None   = None
+_sniffer: MstpSniffer | None  = None
 _clients: set[WebSocket]       = set()
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -58,14 +60,32 @@ async def _broadcast(event: dict) -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global _monitor, _bridge
+    global _monitor, _bridge, _sniffer
     cfg_path = "config.yaml"
+
+    with open(cfg_path) as f:
+        import yaml
+        cfg = yaml.safe_load(f)
 
     _monitor = HealthMonitor.from_config(cfg_path, broadcast_cb=_broadcast)
     await _monitor.start()
 
     _bridge = MstpBridge.from_config(cfg_path, bacnet=_monitor._scanner._bacnet)
     await _bridge.start()
+
+    # Sniffer runs on SAME serial port in passive mode — no need to join token ring
+    sniffer_cfg = cfg.get("sniffer", {})
+    if sniffer_cfg.get("enabled", True):
+        def _on_pathology(p: Pathology) -> None:
+            asyncio.create_task(_broadcast({
+                "type": "pathology",
+                "severity": p.severity,
+                "code": p.code,
+                "description": p.description,
+                "nodes_involved": p.nodes_involved,
+            }))
+        _sniffer = MstpSniffer.from_config(cfg_path, on_pathology=_on_pathology)
+        await _sniffer.start()
 
     # Launch background tasks
     asyncio.create_task(_monitor.run())
@@ -75,6 +95,8 @@ async def startup() -> None:
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    if _sniffer:
+        await _sniffer.stop()
     if _bridge:
         await _bridge.stop()
     if _monitor:
@@ -148,6 +170,33 @@ async def bridge_point(node_id: int, obj_type: str, instance: int) -> dict:
     if not pv:
         raise HTTPException(status_code=404)
     return pv.to_dict()
+
+
+# ── Sniffer API ───────────────────────────────────────────────────────────────
+
+@app.get("/api/sniffer/report")
+async def sniffer_report() -> dict:
+    """Full health report: bus utilization, per-node stats, pathologies."""
+    if not _sniffer:
+        return {"enabled": False}
+    return _sniffer.get_report()
+
+
+@app.get("/api/sniffer/frames")
+async def sniffer_frames(limit: int = 100) -> list[dict]:
+    """Rolling log of the last N raw frames captured."""
+    if not _sniffer:
+        return []
+    return _sniffer.get_frame_log(limit=limit)
+
+
+@app.get("/api/sniffer/pathologies")
+async def sniffer_pathologies() -> list[dict]:
+    """Current list of detected bus pathologies."""
+    if not _sniffer:
+        return []
+    report = _sniffer.get_report()
+    return report.get("pathologies", [])
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
