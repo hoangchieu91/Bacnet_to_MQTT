@@ -55,10 +55,10 @@ class BacnetService:
         self._device_names: dict[int, str] = {}  # cached device names
         self._name_task: Any = None  # background name reading task
         self._read_lock = asyncio.Lock()  # prevent concurrent BACnet reads
-        # COV: per-instance subscription tracking
-        # NOTE: This is polling-based COV simulation (not true BACnet SubscribeCOV service).
-        # True COV requires BACpypes3 SubscribeCOVRequest which is a future enhancement.
-        self._cov_callbacks: dict[str, Any] = {}  # key: "address:type:instance"
+        # True COV: track active BAC0 COVSubscription tasks
+        # key: "address:type:instance" → asyncio.Task
+        self._cov_tasks: dict[str, Any] = {}
+        self._cov_callbacks: dict[str, Any] = {}  # key → async callback(value)
 
     # ── lifecycle ──────────────────────────────
     async def start(self) -> None:
@@ -474,37 +474,159 @@ class BacnetService:
         except Exception:
             return None  # Object doesn't support eventState
 
-    # ── COV (Change of Value) Subscription ─────
+    # ── COV (Change of Value) Subscription ──────────────────────────────────
+    # True BACnet COV using BAC0.scripts.Lite.COVSubscription.
+    # The device sends UnconfirmedCOVNotification whenever presentValue changes.
+    # A background asyncio.Task per subscription handles incoming notifications.
+    #
+    # Lifetime is set to COV_LIFETIME seconds; the task auto-renews.
+    # If the device doesn't support COV (no response within 10s), we log a
+    # warning and the caller must fall back to polling.
+
+    COV_LIFETIME = 300   # seconds; re-subscribe before expiry
+    COV_RENEW_EARLY = 30 # renew this many seconds before expiry
 
     async def subscribe_cov(
         self,
         address: str,
         object_type: str,
         object_instance: int,
-        callback,
-        lifetime: int = 0,  # 0 = indefinite
+        callback,            # async callback(value)
+        lifetime: int = 0,   # 0 → use COV_LIFETIME
     ) -> bool:
-        """Subscribe to COV notifications for a BACnet object.
+        """Subscribe to True BACnet COV notifications for a single object.
 
-        callback: async function(address, object_type, object_instance, value, priority_array)
+        Sends a SubscribeCOVRequest to the device and starts a background
+        asyncio.Task that receives UnconfirmedCOVNotification messages via
+        BAC0's `app.change_of_value()` context manager.
+
+        The task auto-renews the subscription before it expires.
+        Returns True if the subscription was started (i.e. device accepted).
         """
         if not self._connected or self._network is None:
             return False
 
         ot = _normalize_type(object_type)
         key = f"{address}:{ot}:{object_instance}"
-        self._cov_callbacks[key] = callback
 
+        # Cancel existing subscription for this key if any
+        await self.unsubscribe_cov(address, object_type, object_instance)
+
+        self._cov_callbacks[key] = callback
+        effective_lifetime = lifetime if lifetime > 0 else self.COV_LIFETIME
+
+        task = asyncio.create_task(
+            self._cov_subscription_loop(key, address, ot, object_instance, callback, effective_lifetime),
+            name=f"cov-{key}",
+        )
+        self._cov_tasks[key] = task
+        logger.info("COV subscription started: %s (lifetime=%ds)", key, effective_lifetime)
+        return True
+
+    async def _cov_subscription_loop(
+        self,
+        key: str,
+        address: str,
+        object_type: str,
+        object_instance: int,
+        callback,
+        lifetime: int,
+    ) -> None:
+        """Long-running COV subscription task.
+
+        Loops indefinitely, re-subscribing before lifetime expires.
+        Exits when cancelled (via unsubscribe_cov).
+        """
         try:
-            # BAC0 supports cov subscription
-            await self._network.read(
-                f"{address} {ot} {object_instance} presentValue",
-            )
-            logger.info("COV subscribe: %s (initial read ok, will poll-on-change)", key)
-            return True
-        except Exception as exc:
-            logger.warning("COV subscribe failed for %s: %s (will fall back to poll)", key, exc)
-            return False
+            from BAC0.scripts.Lite import COVSubscription
+        except ImportError:
+            logger.error("COVSubscription not available in this BAC0 version")
+            return
+
+        obj_id = (object_type, object_instance)
+
+        while key in self._cov_callbacks:
+            try:
+                sub = COVSubscription(
+                    address=address,
+                    objectID=obj_id,
+                    lifetime=lifetime,
+                    confirmed=False,     # Unconfirmed COV — lighter on network
+                    callback=None,       # We handle via scm.get_value() below
+                    BAC0App=self._network,
+                )
+
+                # run() internally uses app.change_of_value() which sends
+                # SubscribeCOVRequest and waits for UnconfirmedCOVNotification.
+                # We override with our own loop to intercept values.
+                app = self._network.this_application.app
+                renew_at = asyncio.get_event_loop().time() + lifetime - self.COV_RENEW_EARLY
+
+                async with app.change_of_value(
+                    sub.address,
+                    sub.obj_identifier,
+                    sub.process_identifier,
+                    sub.confirmed,
+                    sub.lifetime,
+                ) as scm:
+                    logger.info("COV active: %s", key)
+                    while key in self._cov_callbacks:
+                        time_left = renew_at - asyncio.get_event_loop().time()
+                        if time_left <= 0:
+                            logger.debug("COV renewing: %s", key)
+                            break  # exit context manager → re-subscribe
+
+                        try:
+                            incoming = asyncio.ensure_future(scm.get_value())
+                            done, pending = await asyncio.wait(
+                                [incoming],
+                                timeout=min(time_left, 10.0),
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            for t in pending:
+                                t.cancel()
+
+                            if incoming in done:
+                                prop_id, prop_val = incoming.result()
+                                # We only care about presentValue property
+                                pid_str = str(prop_id).lower()
+                                if "present" in pid_str or pid_str == "presentvalue":
+                                    value = self._extract_cov_value(prop_val)
+                                    if callback is not None and key in self._cov_callbacks:
+                                        if asyncio.iscoroutinefunction(callback):
+                                            asyncio.create_task(callback(value))
+                                        else:
+                                            callback(value)
+                        except asyncio.CancelledError:
+                            return
+                        except Exception as exc:
+                            logger.debug("COV get_value error (%s): %s", key, exc)
+                            await asyncio.sleep(1)
+
+            except asyncio.CancelledError:
+                logger.info("COV subscription cancelled: %s", key)
+                return
+            except Exception as exc:
+                logger.warning("COV subscription error (%s): %s — retrying in 30s", key, exc)
+                await asyncio.sleep(30)  # back-off before retry
+
+        logger.info("COV subscription loop ended: %s", key)
+
+    def _extract_cov_value(self, prop_val: Any) -> Any:
+        """Extract a Python primitive from a BACpypes3 COV property value."""
+        try:
+            # Enumerated types (active/inactive, etc.)
+            if hasattr(prop_val, "value"):
+                v = prop_val.value
+                if isinstance(v, (int, float, str, bool)):
+                    return v
+            # Direct numeric / string
+            if isinstance(prop_val, (int, float, str, bool)):
+                return prop_val
+            # Fallback: stringify
+            return str(prop_val)
+        except Exception:
+            return str(prop_val)
 
     async def unsubscribe_cov(
         self,
@@ -512,18 +634,29 @@ class BacnetService:
         object_type: str,
         object_instance: int,
     ) -> bool:
-        """Unsubscribe from COV notifications."""
+        """Cancel a COV subscription and stop the background task."""
         ot = _normalize_type(object_type)
         key = f"{address}:{ot}:{object_instance}"
         self._cov_callbacks.pop(key, None)
-        logger.info("COV unsubscribe: %s", key)
+        task = self._cov_tasks.pop(key, None)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+        logger.info("COV unsubscribed: %s", key)
         return True
 
     def unsubscribe_all_cov(self):
-        """Remove all COV subscriptions."""
-        count = len(self._cov_callbacks)
+        """Cancel all active COV subscriptions."""
+        keys = list(self._cov_tasks.keys())
         self._cov_callbacks.clear()
-        logger.info("Unsubscribed all COV (%d)", count)
+        for task in self._cov_tasks.values():
+            if not task.done():
+                task.cancel()
+        self._cov_tasks.clear()
+        logger.info("Unsubscribed all COV (%d)", len(keys))
 
     async def read_object_properties(
         self,
