@@ -505,28 +505,121 @@ export function SettingsPage() {
       )}
 
       {/* System Tab */}
-      {tab === 'system' && (
-        <>
-          <Section title="Configuration Backup">
-            <p className="text-xs text-text-secondary mb-4">Export or import the entire gateway configuration including all mappings, groups, and schedules.</p>
-            <div className="flex gap-2">
-              <button onClick={exportConfig} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-text-secondary text-sm hover:text-white hover:border-accent-primary transition-all">
-                <Download size={14} /> Export Config
-              </button>
-              <button onClick={importConfig} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-text-secondary text-sm hover:text-white hover:border-accent-primary transition-all">
-                <Upload size={14} /> Import Config
-              </button>
-            </div>
-          </Section>
-          <Section title="About">
-            <div className="text-xs text-text-secondary space-y-1">
-              <div><b className="text-white">BACnet-MQTT Gateway</b> v2.0.0</div>
-              <div>React Frontend • FastAPI Backend • AG-Grid</div>
-              <div>Running on Raspberry Pi / Ubuntu Server</div>
-            </div>
-          </Section>
-        </>
-      )}
+      {tab === 'system' && (() => {
+        const [dbStats, setDbStats] = React.useState(null);
+        const [retConf, setRetConf] = React.useState({ retention_days: 90, event_retention_days: 180 });
+        const [cleanResult, setCleanResult] = React.useState(null);
+        const [cleaning, setCleaning] = React.useState(false);
+        const [savingRet, setSavingRet] = React.useState(false);
+
+        React.useEffect(() => {
+          fetch('/api/history/stats').then(r => r.json()).then(d => {
+            setDbStats(d);
+            setRetConf({ retention_days: d.retention_days || 90, event_retention_days: d.event_retention_days || 180 });
+          }).catch(() => {});
+        }, []);
+
+        const saveRetention = async () => {
+          setSavingRet(true);
+          await fetch('/api/history/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(retConf) });
+          setSavingRet(false);
+        };
+
+        const runCleanup = async () => {
+          setCleaning(true); setCleanResult(null);
+          try {
+            const res = await fetch('/api/history/cleanup', { method: 'POST' });
+            const d = await res.json();
+            setCleanResult(d);
+            const stats = await fetch('/api/history/stats').then(r => r.json());
+            setDbStats(stats);
+          } catch (e) { setCleanResult({ error: String(e) }); }
+          setCleaning(false);
+        };
+
+        return (
+          <>
+            <Section title="Configuration Backup">
+              <p className="text-xs text-text-secondary mb-4">Export or import the entire gateway configuration including all mappings, groups, and schedules.</p>
+              <div className="flex gap-2">
+                <button onClick={exportConfig} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-text-secondary text-sm hover:text-white hover:border-accent-primary transition-all">
+                  <Download size={14} /> Export Config
+                </button>
+                <button onClick={importConfig} className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg text-text-secondary text-sm hover:text-white hover:border-accent-primary transition-all">
+                  <Upload size={14} /> Import Config
+                </button>
+              </div>
+            </Section>
+
+            <Section title="Data Retention">
+              {/* DB Stats row */}
+              {dbStats && (
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  {[
+                    ['DB Size', `${dbStats.db_size_mb ?? '?'} MB`],
+                    ['History Records', (dbStats.total_records ?? 0).toLocaleString()],
+                    ['Events', (dbStats.event_count ?? 0).toLocaleString()],
+                  ].map(([k, v]) => (
+                    <div key={k} className="bg-bg-input/40 border border-border/30 rounded-lg p-3 text-center">
+                      <div className="text-[10px] text-text-muted uppercase tracking-wider mb-0.5">{k}</div>
+                      <div className="text-sm font-bold text-white">{v}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Retention config */}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs text-text-muted block mb-1">History Retention (days)</label>
+                  <input type="number" min={1} max={3650} value={retConf.retention_days}
+                    onChange={e => setRetConf(c => ({ ...c, retention_days: parseInt(e.target.value) || 90 }))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                  <p className="text-[10px] text-text-muted mt-1">Tự xóa point history cũ hơn N ngày</p>
+                </div>
+                <div>
+                  <label className="text-xs text-text-muted block mb-1">Event Log Retention (days)</label>
+                  <input type="number" min={1} max={3650} value={retConf.event_retention_days}
+                    onChange={e => setRetConf(c => ({ ...c, event_retention_days: parseInt(e.target.value) || 180 }))}
+                    className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus" />
+                  <p className="text-[10px] text-text-muted mt-1">Device online/offline, anomaly events</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-1">
+                <button onClick={saveRetention} disabled={savingRet}
+                  className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent-primary to-purple-600 rounded-lg text-white text-sm font-medium disabled:opacity-50">
+                  <Save size={14} /> {savingRet ? 'Saving…' : 'Save Retention'}
+                </button>
+                <button onClick={runCleanup} disabled={cleaning}
+                  className="flex items-center gap-2 px-4 py-2 border border-warning/50 text-warning rounded-lg text-sm hover:bg-warning/10 transition-all disabled:opacity-50">
+                  <RefreshCw size={14} className={cleaning ? 'animate-spin' : ''} />
+                  {cleaning ? 'Cleaning…' : 'Run Cleanup Now'}
+                </button>
+              </div>
+
+              {cleanResult && !cleanResult.error && (
+                <div className="mt-3 px-3 py-2 rounded-lg bg-success/10 border border-success/30 text-xs text-success space-y-0.5">
+                  <div>✓ History deleted: <b>{cleanResult.history_deleted}</b> records</div>
+                  <div>✓ Events deleted: <b>{cleanResult.events_deleted}</b> records</div>
+                  <div>✓ Freed: <b>{cleanResult.freed_mb} MB</b> ({cleanResult.size_before_mb} → {cleanResult.size_after_mb} MB)</div>
+                </div>
+              )}
+              {cleanResult?.error && (
+                <div className="mt-3 px-3 py-2 rounded-lg bg-error/10 border border-error/30 text-xs text-error">✗ {cleanResult.error}</div>
+              )}
+            </Section>
+
+            <Section title="About">
+              <div className="text-xs text-text-secondary space-y-1">
+                <div><b className="text-white">BACnet-MQTT Gateway</b> v2.0.0</div>
+                <div>React Frontend • FastAPI Backend • SQLite History</div>
+                <div>Running on Raspberry Pi / Ubuntu Server</div>
+              </div>
+            </Section>
+          </>
+        );
+      })()}
     </div>
   );
 }

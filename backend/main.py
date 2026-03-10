@@ -1685,6 +1685,23 @@ async def update_history_config(body: dict[str, Any]):
     return history_store.update_config(**body)
 
 
+@app.get("/api/history/stats")
+async def get_history_stats():
+    """Return DB size, record counts, retention settings."""
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    return history_store.get_stats_with_retention()
+
+
+@app.post("/api/history/cleanup")
+async def run_history_cleanup():
+    """Manually trigger retention cleanup — deletes old history + events, returns stats."""
+    if not history_store:
+        return JSONResponse({"error": "History store not initialised"}, status_code=503)
+    result = history_store.manual_cleanup()
+    return result
+
+
 @app.post("/api/history/purge")
 async def purge_history(body: dict[str, Any]):
     if not history_store:
