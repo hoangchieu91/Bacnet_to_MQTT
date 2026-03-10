@@ -376,34 +376,6 @@ export function Dashboard() {
           accent={status?.mqtt_connected ? 'bg-gradient-to-r from-success to-transparent' : 'bg-gradient-to-r from-error to-transparent'} />
       </div>
 
-      {/* Device Status Grid */}
-      {devices.length > 0 && (
-        <div className="glass-card p-5">
-          <div className="text-[10px] uppercase tracking-[0.15em] text-text-muted font-bold mb-4">Device Status</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
-            {devices.map(d => {
-              const isOnline = d.status === 'online';
-              return (
-                <div key={d.device_id}
-                  className={`flex flex-col gap-1 px-3 py-2.5 rounded-lg border transition-all ${
-                    isOnline
-                      ? 'bg-success/5 border-success/25 hover:bg-success/10'
-                      : 'bg-error/5 border-error/25 hover:bg-error/10'
-                  }`}>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${isOnline ? 'bg-success' : 'bg-error'}`} />
-                    <span className="text-xs font-bold text-white truncate">{d.name || `Dev ${d.device_id}`}</span>
-                  </div>
-                  <div className="text-[10px] text-text-muted font-mono truncate">{d.address || '—'}</div>
-                  <div className={`text-[9px] font-bold uppercase ${isOnline ? 'text-success' : 'text-error'}`}>
-                    {isOnline ? 'Online' : 'Offline'}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* System Resources */}
       {health && (
