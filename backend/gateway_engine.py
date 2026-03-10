@@ -1059,27 +1059,24 @@ class GatewayEngine:
 
                     last_pinged[dev_id] = now
 
-                    # Use read_device_name — uses BAC0 internal routing (MSTP-safe)
-                    # Returns "Device X" on timeout/failure, real name on success
+                    # ── Ping: try to read objectName from device ────────────
+                    # SUCCESS = no exception (device responded), regardless of name value
+                    # FAILURE = exception (timeout, no route, device unreachable)
                     try:
                         name_result = await self._bacnet.read_device_name(dev_id)
-                        success = bool(name_result and name_result != f"Device {dev_id}")
-                    except Exception:
-                        name_result = None
-                        success = False
-
-                    if success:
+                        # Device responded → online
                         ping_fails[dev_id] = 0
-                        cur = dev_info.get("name", "")
-                        if name_result and (not cur or cur == f"Device {dev_id}"):
-                            dev_info["name"] = name_result
-                            self._save_known_devices()
+                        # Update name only if we got a real name (not fallback)
+                        if name_result and name_result != f"Device {dev_id}":
+                            cur = dev_info.get("name", "")
+                            if not cur or cur == f"Device {dev_id}":
+                                dev_info["name"] = name_result
+                                self._save_known_devices()
                         self._on_device_poll_success(dev_id, address)
-                    else:
+                    except Exception as exc:
                         fails = ping_fails.get(dev_id, 0) + 1
                         ping_fails[dev_id] = fails
-                        err = name_result or "No response"
-                        self._on_device_poll_fail(dev_id, str(err))
+                        self._on_device_poll_fail(dev_id, str(exc))
                         if fails % 5 == 0:
                             logger.debug("[Ping] Device %d at %s: %d consecutive failures", dev_id, address, fails)
 
