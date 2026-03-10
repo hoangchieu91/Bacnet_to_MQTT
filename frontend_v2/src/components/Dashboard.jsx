@@ -1,14 +1,130 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Activity, Server, Wifi, Database, MonitorSmartphone, Play, Square,
-  Search, Filter, RefreshCw, ChevronDown, X, AlertTriangle, CheckCircle,
-  WifiOff, Info, Clock,
+  Search, RefreshCw, X, AlertTriangle, CheckCircle,
+  WifiOff, Info, Radio, Network, Layers, ShieldCheck,
 } from 'lucide-react';
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts';
 
 const API = '/api';
+
+// ── Service Health Panel ──────────────────────────────────────────────────────
+const SVC_META = {
+  'bacnet-gateway': { label: 'BACnet Gateway', icon: Radio },
+  'nginx':          { label: 'NGINX (Web UI)', icon: Network },
+  'mosquitto':      { label: 'Mosquitto MQTT', icon: Wifi },
+  'mqtt':           { label: 'MQTT Broker', icon: Wifi },
+};
+
+function ServiceRow({ label, ok, status, detail, icon: Icon }) {
+  return (
+    <div className={`flex items-center gap-2.5 px-3 py-2 rounded-lg border text-xs ${
+      ok ? 'bg-success/5 border-success/20' : 'bg-error/5 border-error/20'
+    }`}>
+      {Icon && <Icon size={13} className={ok ? 'text-success' : 'text-error'} />}
+      <span className="flex-1 text-white truncate">{label}</span>
+      {detail && <span className="text-[10px] text-text-muted font-mono truncate max-w-[100px]">{detail}</span>}
+      <span className={`text-[10px] font-bold uppercase ${ok ? 'text-success' : 'text-error'}`}>
+        {status}
+      </span>
+    </div>
+  );
+}
+
+function ServiceHealthPanel() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [lastUpdate, setLastUpdate] = useState(null);
+
+  const fetch_ = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/system/services`);
+      if (r.ok) { setData(await r.json()); setLastUpdate(new Date()); }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => {
+    fetch_();
+    const t = setInterval(fetch_, 30000);
+    return () => clearInterval(t);
+  }, [fetch_]);
+
+  // Overall health
+  const allOk = data && [
+    ...data.services.filter(s => ['bacnet-gateway','nginx'].includes(s.name)),
+    ...data.ports.filter(p => p.port === 8000 || p.port === 8080),
+    data.bacnet_udp,
+  ].every(x => x.ok);
+
+  return (
+    <div className="glass-card p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] uppercase tracking-[0.15em] text-text-muted font-bold">Services & Ports</div>
+            {data && (
+              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${allOk ? 'bg-success/15 text-success' : 'bg-error/15 text-error'}`}>
+                {allOk ? '● All Healthy' : '● Issues Detected'}
+              </span>
+            )}
+          </div>
+          {lastUpdate && <div className="text-[9px] text-text-muted mt-0.5">Updated {lastUpdate.toLocaleTimeString('vi-VN')}</div>}
+        </div>
+        <button onClick={fetch_} className="p-1.5 rounded-lg border border-border text-text-muted hover:text-white hover:border-accent-primary/50 transition-all">
+          <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
+
+      {!data ? (
+        <div className="text-xs text-text-muted text-center py-4">Loading…</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {/* Services */}
+          <div className="space-y-1.5">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-2">Systemd Services</div>
+            {data.services.filter((s,i,arr) => arr.findIndex(x=>x.name===s.name)===i).map(s => {
+              const meta = SVC_META[s.name] || { label: s.name, icon: Server };
+              return <ServiceRow key={s.name} label={meta.label} ok={s.ok} status={s.status} icon={meta.icon} />;
+            })}
+            {/* Gateway process */}
+            <ServiceRow
+              label="BACnet Engine"
+              ok={data.gateway?.ok}
+              status={data.gateway?.status || 'unknown'}
+              icon={ShieldCheck}
+            />
+          </div>
+
+          {/* Ports */}
+          <div className="space-y-1.5">
+            <div className="text-[9px] uppercase tracking-widest text-text-muted font-bold mb-2">Network Ports</div>
+            {data.ports.map((p, i) => (
+              <ServiceRow
+                key={i}
+                label={p.label}
+                ok={p.ok}
+                status={p.status}
+                detail={`${p.host}:${p.port}`}
+                icon={Layers}
+              />
+            ))}
+            {/* BACnet UDP */}
+            <ServiceRow
+              label={data.bacnet_udp.label}
+              ok={data.bacnet_udp.ok}
+              status={data.bacnet_udp.status}
+              detail={`:${data.bacnet_udp.port} UDP`}
+              icon={Radio}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function formatUptime(seconds) {
@@ -420,6 +536,9 @@ export function Dashboard() {
           </div>
         </div>
       )}
+
+      {/* Services & Ports Health */}
+      <ServiceHealthPanel />
 
       {/* Online/Offline Chart */}
       <div className="glass-card p-5">
