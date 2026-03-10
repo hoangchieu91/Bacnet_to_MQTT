@@ -3,6 +3,8 @@
 **Phiên bản:** 2.x  
 **Ngày cập nhật:** 2026-03-10  
 **Môi trường deploy:** Ubuntu Server (Raspberry Pi / x86)  
+**Web UI:** `http://<server-ip>:8080` (NGINX)
+
 
 ---
 
@@ -13,30 +15,34 @@
 │                        Gateway Server                           │
 │                                                                 │
 │  ┌─────────────┐    ┌──────────────────┐    ┌──────────────┐  │
-│  │  Frontend   │    │  FastAPI Backend  │    │  BAC0/       │  │
-│  │  React/Vite │◄──►│  (Uvicorn)        │◄──►│  BACpypes3   │  │
-│  │  Port 8080  │    │  Port 8000        │    │  Port 47808  │  │
-│  └─────────────┘    └──────┬───────────┘    └──────────────┘  │
-│         ▲                  │                        │           │
-│         │           ┌──────▼───────┐               │           │
-│         │           │  SQLite DB   │               │           │
-│         │           │  history.db  │               │           │
-│         │           └──────────────┘               │           │
-│         │                                          │           │
-│  ┌──────┴──────────────────────────────────────────▼──────┐   │
-│  │                    WebSocket /ws                         │   │
+│  │   NGINX     │    │  FastAPI Backend  │    │  BAC0/       │  │
+│  │  Port 8080  │───►│  Uvicorn:8000    │◄──►│  BACpypes3   │  │
+│  │ (static+    │ /api│ (localhost only) │    │  Port 47808  │  │
+│  │  proxy)     │ /ws │                  │    │  UDP BACnet  │  │
+│  └──────┬──────┘    └──────┬───────────┘    └──────────────┘  │
+│         │                  │                                    │
+│  Serves │          ┌───────▼───────┐                           │
+│  dist/  │          │  SQLite DB    │                           │
+│  (SPA)  │          │  history.db   │                           │
+│         │          └───────────────┘                           │
+│         │                                                       │
+│  ┌──────▼─────────────────────────────────────────────────┐   │
+│  │            WebSocket /ws (proxied via NGINX)             │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
          │                                          │
-         ▼ NGINX reverse proxy                      ▼ BACnet/IP UDP
-    Port 8080                              BACnet Devices (LAN)
+     Port 8080                              BACnet/IP UDP
+     (NGINX)                               BACnet Devices (LAN)
          │
          ▼ MQTT Publish
-    MQTT Broker (Mosquitto / cloud)
+    MQTT Broker (cloud / local)
          │
          ▼ Subscribe
     SCADA / Home Assistant / Node-RED
 ```
+
+**Quan trọng:** Frontend update → chỉ rsync `dist/` → **NGINX tự pick up, không restart service, không gây BACnet disconnection**.
+
 
 ---
 
@@ -84,9 +90,13 @@ Bacnet_MQTT/
 │   └── history.db            ← SQLite: point history + events
 ├── docs/                     ← Tài liệu kỹ thuật
 └── scripts/
-    ├── bacnet-routes.sh      ← Fix routing khi có Tailscale
-    └── bacnet-routes.service ← systemd service chạy routing fix
+    ├── bacnet-gateway.service ← systemd unit for backend
+    ├── bacnet-routes.sh      ← Fix routing khi có Tailscale/VPN
+    ├── deploy-frontend.sh    ← Deploy UI only (no backend restart)
+    ├── deploy-backend.sh     ← Deploy Python code + restart service
+    └── install.sh            ← Fresh install (Ubuntu/Pi)
 ```
+
 
 ---
 
@@ -199,18 +209,24 @@ sudo systemctl restart bacnet-routes
 
 | Method | Path | Mô tả |
 |--------|------|-------|
+| GET | `/api/status` | Trạng thái gateway + MQTT |
+| GET | `/api/health` | CPU/RAM/Disk/Temp |
+| GET | `/api/system/services` | Systemd services + port health |
 | GET | `/api/mappings` | List tất cả mappings |
 | POST | `/api/mappings` | Tạo mapping mới |
 | PUT | `/api/mappings/{id}` | Update mapping |
 | DELETE | `/api/mappings/{id}` | Xóa mapping |
 | POST | `/api/mappings/bulk-update` | Bulk update nhiều mappings |
+| GET | `/api/mappings/export` | Export CSV |
+| POST | `/api/mappings/import` | Import CSV/JSON |
 | GET | `/api/history/{id}` | Lịch sử giá trị một point |
-| GET | `/api/devices` | List devices đã discover |
+| GET | `/api/bacnet/devices` | List devices đã discover |
+| GET | `/api/devices/health` | Online/offline status + fail count |
 | POST | `/api/bacnet/discover` | Trigger discovery |
 | POST | `/api/bacnet/read` | Đọc một property |
 | POST | `/api/bacnet/write` | Ghi một property |
-| POST | `/api/mappings/import` | Import CSV/JSON |
-| GET | `/api/mappings/export` | Export JSON (dùng để CSV convert phía frontend) |
+| GET | `/api/events` | Event log (filter: type, device, time, search) |
+| GET | `/api/events/online-chart` | Biểu đồ online/offline events theo giờ |
 | WS | `/ws` | WebSocket realtime updates |
 
 ---
