@@ -396,6 +396,20 @@ class GatewayEngine:
     # ═══════════════════════════════════════════
     # Polling Loop — reads presentValue + priorityArray
     # ═══════════════════════════════════════════
+    RPM_BATCH_SIZE    = 8    # Max objects per ReadPropertyMultiple request (MS/TP safe)
+    RPM_BATCH_SIZE_IP = 20   # Larger batch for pure IP/BACnet-IP devices
+
+    @staticmethod
+    def _is_ip_address(address: str) -> bool:
+        """Return True if address is a direct BACnet/IP address (e.g. '192.168.1.10:47808').
+        MS/TP router addresses look like '8700:20' (network:node) — those return False.
+        """
+        if not address:
+            return False
+        # IP address: contains a dot (IPv4) or starts with '[' (IPv6)
+        # MS/TP router: only digits and one colon (net:node), no dots
+        return '.' in address or address.startswith('[')
+
     async def _polling_loop(self) -> None:
         last_poll: dict[str, float] = {}
 
@@ -419,30 +433,38 @@ class GatewayEngine:
                 mappings = self._cm.mappings
                 now = time.time()
 
+                # ── Determine which mappings are due for a poll ──────────────
+                due: list[PointMapping] = []
                 for mapping in mappings:
                     if not mapping.enabled:
                         continue
-
-                    # COV mode: subscribe to device-pushed notifications
-                    # Use a long poll interval (5 min) only as offline-detect fallback.
-                    # The device proactively pushes COV when value changes.
-                    if mapping.read_mode == "cov":
-                        interval = 300  # 5-minute fallback poll
-                    else:
-                        interval = mapping.poll_interval
-
-                    # Apply throttle multiplier if RAM is high
+                    interval = 300 if mapping.read_mode == "cov" else mapping.poll_interval
                     if self._ram_throttled:
-                        interval = interval * 2  # Double interval under memory pressure
-
+                        interval *= 2
                     elapsed = now - last_poll.get(mapping.id, 0)
-                    if elapsed < interval:
-                        continue
+                    if elapsed >= interval:
+                        last_poll[mapping.id] = now
+                        due.append(mapping)
 
-                    last_poll[mapping.id] = now
-                    # Schedule poll but serialized through _bacnet_read_lock
-                    # This prevents BAC0 queue saturation on MSTP networks
-                    asyncio.create_task(self._poll_single_locked(mapping))
+                if due:
+                    # ── Group due mappings by device for batch RPM ──────
+                    by_device: dict[int, list[PointMapping]] = {}
+                    for m in due:
+                        by_device.setdefault(m.device_id, []).append(m)
+
+                    for device_id, dev_mappings in by_device.items():
+                        address = self._bacnet.get_device_address(device_id)
+
+                        if address and self._is_ip_address(address) and len(dev_mappings) > 1:
+                            # ── BACnet/IP device with multiple due points ↔ use RPM batch ──
+                            batch_size = self.RPM_BATCH_SIZE_IP
+                            for i in range(0, len(dev_mappings), batch_size):
+                                chunk = dev_mappings[i : i + batch_size]
+                                asyncio.create_task(self._poll_device_batch(chunk))
+                        else:
+                            # ── MS/TP device or no address yet ↔ safe single-read path ──
+                            for m in dev_mappings:
+                                asyncio.create_task(self._poll_single_locked(m))
 
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -524,6 +546,96 @@ class GatewayEngine:
         """
         async with self._bacnet_read_lock:
             await self._poll_single(mapping)
+
+    async def _poll_device_batch(self, mappings: list[PointMapping]) -> None:
+        """Batch-poll multiple points on the SAME BACnet/IP device via ReadPropertyMultiple.
+
+        1 RPM packet reads N presentValues simultaneously instead of N serial requests.
+        Falls back transparently to single-read if RPM fails (device quirk or BAC0 issue).
+        Only used for BACnet/IP devices; MS/TP goes through _poll_single_locked.
+        """
+        if not mappings:
+            return
+
+        first = mappings[0]
+        device_id = first.device_id
+
+        async with self._bacnet_read_lock:
+            try:
+                address = self._bacnet.get_device_address(device_id)
+                if not address:
+                    # No address yet — fall back to individual reads
+                    for m in mappings:
+                        await self._poll_single(m)
+                    return
+
+                # Build object list for RPM: (object_type, instance)
+                objects = [(m.object_type, m.object_instance) for m in mappings]
+
+                # Read presentValue for all objects in one RPM packet
+                batch_results = await self._bacnet.read_multiple_objects(
+                    address, objects, properties=["presentValue"]
+                )
+
+                now_str = datetime.now(timezone.utc).isoformat()
+
+                for mapping in mappings:
+                    key = (mapping.object_type, mapping.object_instance)
+                    obj_data = batch_results.get(key, {})
+                    value = obj_data.get("presentValue")
+
+                    if value is not None:
+                        # Update mapping state
+                        mapping.last_value = value
+                        mapping.last_updated = now_str
+                        self._on_device_poll_success(device_id, address)
+
+                        # Record to history DB
+                        if self._history:
+                            try:
+                                self._history.record(mapping.id, value)
+                            except Exception as he:
+                                logger.debug("History record error: %s", he)
+
+                        # Publish to MQTT
+                        prefix = self._cm.config.mqtt.topic_prefix
+                        base_topic = mapping.mqtt_topic or \
+                            f"{prefix}/{device_id}/{mapping.object_type}/{mapping.object_instance}"
+                        value_payload = {
+                            "value": value,
+                            "object_type": mapping.object_type,
+                            "object_instance": mapping.object_instance,
+                            "device_id": device_id,
+                            "timestamp": now_str,
+                            "source": "rpm",
+                        }
+                        self._mqtt.publish(f"{base_topic}/value", value_payload)
+
+                        # Broadcast WebSocket
+                        await self._ws.broadcast({
+                            "type": "point_update",
+                            "mapping_id": mapping.id,
+                            "label": mapping.label,
+                            "read_mode": mapping.read_mode,
+                            **value_payload,
+                        })
+                    else:
+                        # RPM returned None for this object — schedule individual retry
+                        logger.debug("[RPM] %s obj %s:%s returned None — retrying single",
+                                     address, mapping.object_type, mapping.object_instance)
+                        await self._poll_single(mapping)
+
+                logger.debug("[RPM] %s: polled %d objects in 1 batch request", address, len(mappings))
+
+            except Exception as exc:
+                logger.warning("[RPM] Batch poll failed for device %d (%s): %s — falling back",
+                               device_id, first.device_id, exc)
+                # Full fallback: poll all individually
+                for m in mappings:
+                    try:
+                        await self._poll_single(m)
+                    except Exception as fe:
+                        logger.debug("[RPM] Single fallback error %s: %s", m.id, fe)
 
     async def _poll_single(self, mapping: PointMapping) -> None:
         """Read presentValue + priorityArray and publish to MQTT + WebSocket."""

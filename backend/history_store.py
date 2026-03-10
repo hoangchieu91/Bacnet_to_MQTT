@@ -40,6 +40,7 @@ class HistoryStore:
         self.max_records_per_point = max_records_per_point
         self.max_db_size_mb = max_db_size_mb
         self.retention_days = retention_days
+        self.event_retention_days = 180   # events kept longer than raw history
         self._conn: sqlite3.Connection | None = None
         self._cleanup_task: asyncio.Task | None = None
         self._record_count = 0  # rough in-memory counter for fast checks
@@ -323,19 +324,56 @@ class HistoryStore:
                 logger.error("Cleanup loop error: %s", e)
 
     def _run_retention_cleanup(self) -> None:
-        """Delete records older than retention_days."""
+        """Delete records older than retention_days (history) and event_retention_days (events)."""
         if self._conn is None:
             return
         with self._write_lock:
+            # ── Point history cleanup ────────────────────────────────────
             cutoff = (datetime.now(timezone.utc) - timedelta(days=self.retention_days)).isoformat()
             deleted = self._conn.execute(
                 "DELETE FROM point_history WHERE timestamp < ?", (cutoff,)
             ).rowcount
             if deleted > 0:
-                self._conn.execute("PRAGMA incremental_vacuum(500)")
-                self._conn.commit()
                 self._record_count = max(0, self._record_count - deleted)
-                logger.info("Retention cleanup: deleted %d records older than %d days", deleted, self.retention_days)
+                logger.info("Retention cleanup: deleted %d history records older than %d days", deleted, self.retention_days)
+
+            # ── Event log cleanup ────────────────────────────────────────
+            event_cutoff = (datetime.now(timezone.utc) - timedelta(days=self.event_retention_days)).isoformat()
+            ev_deleted = self._conn.execute(
+                "DELETE FROM event_log WHERE timestamp < ?", (event_cutoff,)
+            ).rowcount
+            if ev_deleted > 0:
+                self._event_count = max(0, self._event_count - ev_deleted)
+                logger.info("Retention cleanup: deleted %d events older than %d days", ev_deleted, self.event_retention_days)
+
+            if deleted > 0 or ev_deleted > 0:
+                self._conn.execute("PRAGMA incremental_vacuum(500)")
+            self._conn.commit()
+
+    def manual_cleanup(self) -> dict:
+        """Public method: run retention cleanup immediately, return stats."""
+        if self._conn is None:
+            return {"error": "DB not initialized"}
+        with self._write_lock:
+            before_history = self._conn.execute("SELECT COUNT(*) FROM point_history").fetchone()[0]
+            before_events = self._conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0]
+            before_size = self._get_db_size_mb()
+
+            self._run_retention_cleanup()
+
+            after_history = self._conn.execute("SELECT COUNT(*) FROM point_history").fetchone()[0]
+            after_events = self._conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0]
+            after_size = self._get_db_size_mb()
+
+        return {
+            "history_deleted": before_history - after_history,
+            "events_deleted": before_events - after_events,
+            "size_before_mb": round(before_size, 2),
+            "size_after_mb":  round(after_size, 2),
+            "freed_mb":       round(before_size - after_size, 2),
+            "retention_days": self.retention_days,
+            "event_retention_days": self.event_retention_days,
+        }
 
     # ── Event Log ─────────────────────────────
     def log_event(
@@ -426,6 +464,7 @@ class HistoryStore:
             "max_records_per_point": self.max_records_per_point,
             "max_db_size_mb": self.max_db_size_mb,
             "retention_days": self.retention_days,
+            "event_retention_days": self.event_retention_days,
         }
 
     def update_config(self, **kwargs) -> dict:
@@ -435,4 +474,16 @@ class HistoryStore:
             self.max_db_size_mb = int(kwargs["max_db_size_mb"])
         if "retention_days" in kwargs:
             self.retention_days = int(kwargs["retention_days"])
+        if "event_retention_days" in kwargs:
+            self.event_retention_days = int(kwargs["event_retention_days"])
         return self.get_config()
+
+    def get_stats_with_retention(self) -> dict:
+        """Return DB stats including retention config and event count."""
+        stats = self.get_stats()
+        stats.update({
+            "retention_days": self.retention_days,
+            "event_retention_days": self.event_retention_days,
+            "event_count": self._event_count,
+        })
+        return stats

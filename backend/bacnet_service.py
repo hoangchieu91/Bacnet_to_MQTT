@@ -357,6 +357,72 @@ class BacnetService:
             logger.error("Read failed for %s %s %d: %s", address, object_type, object_instance, exc)
             return None
 
+    async def read_multiple_objects(
+        self,
+        address: str,
+        objects: list[tuple[str, int]],          # [(object_type, instance), ...]
+        properties: list[str] | None = None,      # None → ["presentValue"]
+    ) -> dict[tuple[str, int], dict[str, Any]]:
+        """Batch-read presentValue (and optional extra properties) for multiple objects
+        on the same device using ReadPropertyMultiple (RPM) — 1 packet instead of N.
+
+        Returns: {(object_type, instance): {"presentValue": ..., "prop2": ...}, ...}
+        Falls back to individual reads if RPM is unsupported or fails.
+        """
+        if not self._connected or self._network is None:
+            raise RuntimeError("BACnet service not started")
+
+        props = properties or ["presentValue"]
+        results: dict[tuple[str, int], dict[str, Any]] = {}
+
+        # ── Build BAC0 readMulti argument list ────────────────────────────────
+        # BAC0 readMulti format:
+        #   [(address, [(obj_type, instance, [prop1, prop2, ...]), ...])]
+        try:
+            obj_specs = []
+            for ot_raw, inst in objects:
+                ot = _normalize_type(ot_raw)
+                obj_specs.append((ot, inst, props))
+
+            rpm_result = await self._network.readMultiple(
+                address, obj_specs
+            )
+
+            # rpm_result: list of results matching obj_specs order
+            if rpm_result and isinstance(rpm_result, (list, tuple)):
+                for idx, (ot_raw, inst) in enumerate(objects):
+                    try:
+                        raw = rpm_result[idx] if idx < len(rpm_result) else None
+                        if raw is None:
+                            results[(ot_raw, inst)] = {}
+                            continue
+                        # raw may be a dict {prop: value} or just a value (single prop)
+                        if isinstance(raw, dict):
+                            results[(ot_raw, inst)] = raw
+                        elif len(props) == 1:
+                            results[(ot_raw, inst)] = {props[0]: raw}
+                        else:
+                            results[(ot_raw, inst)] = {}
+                    except (IndexError, TypeError):
+                        results[(ot_raw, inst)] = {}
+                logger.debug("[RPM] %s: batch-read %d objects OK", address, len(objects))
+                return results
+
+        except Exception as exc:
+            logger.debug("[RPM] %s: readMultiple failed (%s) → fallback to single reads", address, exc)
+
+        # ── Fallback: individual reads ────────────────────────────────────────
+        for ot_raw, inst in objects:
+            obj_result: dict[str, Any] = {}
+            for prop in props:
+                val = await self.read_object(address, ot_raw, inst, prop)
+                if val is not None:
+                    obj_result[prop] = val
+            results[(ot_raw, inst)] = obj_result
+
+        return results
+
+
     async def read_priority_array(
         self,
         address: str,
