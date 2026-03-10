@@ -109,8 +109,9 @@ class GatewayEngine:
         if self._listener:
             await self._listener.start()
         # Kick off name resolution for all known devices that still have generic names.
-        # Waits 60s for BAC0 to finish its initial WHO-IS scan before reading.
         asyncio.create_task(self._scheduled_name_resolve(delay_s=60))
+        # Kick off COV subscriptions for all mappings with read_mode='cov'
+        asyncio.create_task(self._init_cov_subscriptions(delay_s=5))
         logger.info("Gateway engine started. Listening on %s/cmd/#", prefix)
 
     async def _scheduled_name_resolve(self, delay_s: int = 60) -> None:
@@ -164,6 +165,142 @@ class GatewayEngine:
                     continue
             if to_resolve:
                 await self._resolve_names_with_addresses(to_resolve)
+
+    async def _init_cov_subscriptions(self, delay_s: int = 5) -> None:
+        """Subscribe to True BACnet COV for all mappings with read_mode='cov'.
+
+        Runs once at startup (after a short delay for BAC0 to connect).
+        Also called when a new COV mapping is added at runtime.
+        """
+        await asyncio.sleep(delay_s)
+        if not self._running:
+            return
+
+        cov_mappings = [m for m in self._cm.mappings if m.enabled and m.read_mode == "cov"]
+        if not cov_mappings:
+            logger.info("[COV] No COV mappings found.")
+            return
+
+        logger.info("[COV] Subscribing to %d COV point(s)…", len(cov_mappings))
+        ok = 0
+        fail = 0
+        for mapping in cov_mappings:
+            try:
+                address = self._bacnet.get_device_address(mapping.device_id)
+                if not address:
+                    logger.warning("[COV] No address for device %d (mapping %s) — skipping",
+                                   mapping.device_id, mapping.id)
+                    fail += 1
+                    continue
+
+                # Build a closure that captures this mapping
+                def make_callback(m):
+                    async def _cov_callback(value) -> None:
+                        await self._on_cov_notification(m, value)
+                    return _cov_callback
+
+                success = await self._bacnet.subscribe_cov(
+                    address,
+                    mapping.object_type,
+                    mapping.object_instance,
+                    callback=make_callback(mapping),
+                )
+                if success:
+                    logger.info("[COV] ✓ %s (device %d, %s:%d)",
+                                mapping.label or mapping.id, mapping.device_id,
+                                mapping.object_type, mapping.object_instance)
+                    ok += 1
+                else:
+                    logger.warning("[COV] ✗ %s — device may not support COV, will fallback to poll",
+                                   mapping.label or mapping.id)
+                    fail += 1
+            except Exception as exc:
+                logger.warning("[COV] Error subscribing %s: %s", mapping.id, exc)
+                fail += 1
+
+        logger.info("[COV] Init done: %d subscribed, %d failed/fallback", ok, fail)
+
+    async def _on_cov_notification(self, mapping, value) -> None:
+        """Handle a COV push notification from a BACnet device.
+
+        Processes the value through the same publish pipeline as _poll_single:
+        - Updates mapping.last_value / last_updated
+        - Publishes MQTT value payload
+        - Records to history DB
+        - Broadcasts to WebSocket clients
+        """
+        try:
+            from datetime import datetime, timezone
+            now_str = datetime.now(timezone.utc).isoformat()
+
+            # Try to parse value to native type
+            if isinstance(value, str):
+                vlower = value.lower()
+                if vlower in ("active", "true"):
+                    parsed = "active"
+                elif vlower in ("inactive", "false"):
+                    parsed = "inactive"
+                else:
+                    try:
+                        parsed = float(value)
+                    except ValueError:
+                        parsed = value
+            else:
+                parsed = value
+
+            # Update mapping state
+            mapping.last_value = parsed
+            mapping.last_updated = now_str
+
+            # COV filter: skip if value unchanged
+            old_val = self._last_cov_values.get(mapping.id)
+            if old_val == parsed:
+                return
+            self._last_cov_values[mapping.id] = parsed
+
+            logger.debug("[COV] Push: %s = %s", mapping.label or mapping.id, parsed)
+
+            # Record to history
+            if self._history:
+                try:
+                    self._history.record(mapping.id, parsed)
+                except Exception:
+                    pass
+
+            # Build MQTT topic
+            prefix = self._cm.config.mqtt.topic_prefix
+            base_topic = mapping.mqtt_topic or \
+                f"{prefix}/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
+
+            value_payload = {
+                "value": parsed,
+                "object_type": mapping.object_type,
+                "object_instance": mapping.object_instance,
+                "device_id": mapping.device_id,
+                "timestamp": now_str,
+                "source": "cov",   # distinguish from polled values
+            }
+            self._mqtt.publish(f"{base_topic}/value", value_payload)
+
+            # Broadcast to WebSocket
+            ws_msg = {
+                "type": "point_update",
+                "mapping_id": mapping.id,
+                "label": mapping.label,
+                "read_mode": "cov",
+                "source": "cov",
+                **value_payload,
+            }
+            await self._ws.broadcast(ws_msg)
+
+            # Mark device as online (COV notification = device is alive)
+            address = self._bacnet.get_device_address(mapping.device_id)
+            if address:
+                self._on_device_poll_success(mapping.device_id, address)
+
+        except Exception as exc:
+            logger.error("[COV] Notification processing error for %s: %s", mapping.id, exc)
+
 
     async def _resolve_names_with_addresses(
         self, devices: list[tuple[int, str, str]]
@@ -260,10 +397,11 @@ class GatewayEngine:
                     if not mapping.enabled:
                         continue
 
-                    # COV mode: use longer base interval (60s refresh)
-                    # Poll mode: use configured poll_interval
+                    # COV mode: subscribe to device-pushed notifications
+                    # Use a long poll interval (5 min) only as offline-detect fallback.
+                    # The device proactively pushes COV when value changes.
                     if mapping.read_mode == "cov":
-                        interval = max(mapping.poll_interval, 60)
+                        interval = 300  # 5-minute fallback poll
                     else:
                         interval = mapping.poll_interval
 
