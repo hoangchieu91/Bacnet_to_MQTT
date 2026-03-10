@@ -619,9 +619,10 @@ async def get_events(
     if search:
         sql += " AND message LIKE ?"; params.append(f"%{search}%")
 
-    # Count total
-    count_sql = sql.replace("SELECT id, timestamp, event_type, device_id, mapping_id, severity, message, data_json", "SELECT COUNT(*)")
+    # Count total (wrap in a subquery)
+    count_sql = f"SELECT COUNT(*) FROM ({sql}) _sub"
     total = history_store._conn.execute(count_sql, params).fetchone()[0]
+
 
     sql += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
