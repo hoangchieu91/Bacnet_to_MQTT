@@ -1,36 +1,41 @@
 # BACnet Gateway — Ubuntu Server
 
 ## SSH Access
-- **Tailscale IP:** 100.74.25.27
-- **LAN IP:** 172.20.24.223
-- **VPN IP:** 10.212.154.2 (OpenVPN client `SDN_2026`)
-- **BACnet IP:** 192.168.20.113 (ens38 — mạng BACnet/IP)
-- **User:** user
-- **Pass:** Admin@12345
+- **Tailscale IP:** 10.212.154.2
+- **Network Interface Configuration:**
+  - `eth0` (WAN/Main network): `10.25.7.155` / `24`
+  - `eth1` (BMS network): `192.168.20.250` / `24`
+  - `tun0` (OpenVPN): `10.8.0.x`
+  - `tailscale0` (Tailscale VPN)
 
-## Web UI
-- **URL:** http://100.74.25.27:8080
-- **VPN URL:** http://10.212.154.2:8080
+---
 
-## Services
-- **BACnet-MQTT Gateway:** uvicorn on port 8080
-- **Gateway source:** /home/user/bacnet_mqtt_gateway/
-- **OpenVPN client:** openvpn-client@SDN_2026 (auto-start)
-- **Tailscale:** tailscale0
+## 2. Dịch Vụ Gateway (Website Control)
+- **URL:** http://10.212.154.2:8080
+- **Chức năng:** Quét, giám sát và cấu hình điều khiển BACnet Devices, MQTT Status.
 
-## Hardware
-- **CPU:** Intel i7-6700 @ 3.40GHz (1 vCPU)
-- **RAM:** 1.9 GB
-- **Swap:** 2.0 GB
-- **Disk:** 29 GB (/dev/mapper/ubuntu--vg-ubuntu--lv)
-- **OS:** Ubuntu 24.04 LTS
+---
 
-## Network Interfaces
-| Interface | IP | Mục đích |
-|-----------|-----|---------|
-| ens33 | 172.20.24.223 | Internet (LAN) |
-| ens38 | 192.168.20.113 | BACnet/IP LAN |
-| tailscale0 | 100.74.25.27 | Tailscale VPN |
+## 3. Deployment Paths
+
+| Thành Phần | Đường Dẫn trên Server (`10.212.154.2`) | Chú Thích |
+| :--- | :--- | :--- |
+| **Backend** | `/home/user/bacnet_mqtt_gateway/backend` | Mã nguồn FastAPI |
+| **Frontend** | `/home/user/bacnet_mqtt_gateway/frontend_v2/dist` | File web tĩnh sau khi build (HTML/JS/CSS) |
+| **Service File** | `/etc/systemd/system/bacnet-gateway.service` | Quản lý auto-start |
+| **NGINX Config** | `/etc/nginx/sites-available/bacnet-gateway` | Cấu hình web server & reverse proxy |
+
+---
+
+## 4. Quản Lý Network Interfaces (Netplan)
+File cấu hình: `/etc/netplan/01-network-manager-all.yaml`
+
+| Interface | IP Address | Mô Tả |
+| :--- | :--- | :--- |
+| eth0 | 10.25.7.155 | Mạng chính của văn phòng |
+| eth1 | 192.168.20.250 | Mạng chuyên biệt kết nối tủ BMS/BACnet (có route) |
+| tun0 | DHCP OpenVPN | Mạng của VPN server |
+| tailscale0 | 10.212.154.2 | Tailscale VPN |
 | tun0 | 10.212.154.2 | OpenVPN (→ VPN clients truy cập BACnet) |
 
 ## OpenVPN Server

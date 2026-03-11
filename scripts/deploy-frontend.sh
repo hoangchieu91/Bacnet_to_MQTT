@@ -3,11 +3,11 @@
 # Usage: ./deploy-frontend.sh
 
 set -e
-REMOTE="user@100.74.25.27"
+REMOTE="user@10.212.154.2"
 REMOTE_DIST="/home/user/bacnet_mqtt_gateway/frontend_v2/dist"
 
 echo "▶ Building frontend..."
-cd "$(dirname "$0")/frontend_v2"
+cd "$(dirname "$0")/../frontend_v2"
 npm run build 2>&1 | tail -3
 
 echo "▶ Syncing dist/ to server (no backend restart)..."
