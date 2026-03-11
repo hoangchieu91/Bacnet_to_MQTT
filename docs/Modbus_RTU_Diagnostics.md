@@ -1,412 +1,759 @@
-# Modbus RTU Sniffer & Diagnostics — Kỹ thuật chi tiết
+# Modbus RTU Sniffer & Diagnostics — Deep Dive kỹ thuật
 
-> Tài liệu kỹ thuật cho bộ công cụ `tools/modbus/`  
-> Phiên bản: 1.0 — 2026-03-11
+> Tài liệu giải thích **bản chất** kỹ thuật từ tầng vật lý đến tầng ứng dụng.  
+> Đọc xong sẽ hiểu hoàn toàn cách sniffer bắt frame, parse, và chẩn đoán lỗi bus.
 
 ---
 
 ## Mục lục
-1. [Tổng quan kiến trúc](#1-tổng-quan-kiến-trúc)
-2. [Mode 1: Passive Sniffer (1 cổng COM)](#2-mode-1-passive-sniffer)
-3. [Mode 2: Inline Proxy (2 cổng COM)](#3-mode-2-inline-proxy)
-4. [Bảng so sánh chẩn đoán](#4-bảng-so-sánh-chẩn-đoán)
-5. [Chi tiết kỹ thuật phân tích frame](#5-chi-tiết-kỹ-thuật-phân-tích-frame)
-6. [Cài đặt và sử dụng](#6-cài-đặt-và-sử-dụng)
+1. [Tầng vật lý: RS-485](#1-tầng-vật-lý-rs-485)
+2. [Tầng Data Link: Modbus RTU Frame](#2-tầng-data-link-modbus-rtu-frame)
+3. [CRC-16 Modbus — Tại sao và như thế nào](#3-crc-16-modbus)
+4. [Kỹ thuật Sniffer: Bắt frame từ dòng byte thô](#4-kỹ-thuật-sniffer)
+5. [Kỹ thuật Diagnostics: 8 quy tắc chẩn đoán](#5-kỹ-thuật-diagnostics)
+6. [Inline Proxy: Kỹ thuật MITM cho Modbus RTU](#6-inline-proxy)
+7. [So sánh Passive vs Inline](#7-so-sánh)
 
 ---
 
-## 1. Tổng quan kiến trúc
+## 1. Tầng vật lý: RS-485
 
-Có 2 mode hoạt động, tùy cách đấu nối phần cứng:
+### RS-485 là gì?
+
+RS-485 là chuẩn **điện** (không phải protocol) cho truyền dữ liệu nối tiếp trên **differential pair** (2 dây: A và B).
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  MODE 1: Passive Sniffer (1 COM)                        │
-│                                                         │
-│  Master ──── RS-485 Bus ──── Slave 1                    │
-│                │                Slave 2                  │
-│                │                Slave 3                  │
-│            ┌───┴───┐                                     │
-│            │ USB-485│  ← Tap (chỉ đọc, không gửi)       │
-│            │ ComA   │                                    │
-│            └───┬───┘                                     │
-│                │                                         │
-│           ┌────┴────┐                                    │
-│           │   Pi 5  │                                    │
-│           │ Sniffer │                                    │
-│           └─────────┘                                    │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│  MODE 2: Inline Proxy (2 COM)                           │
-│                                                         │
-│  Master ──── ComA ─── [ Pi 5 ] ─── ComB ──── Slaves    │
-│                       │       │                          │
-│              ┌────────┘       └────────┐                 │
-│              │  Forward               │                  │
-│              │  A→B (Master→Slave)    │                  │
-│              │  B→A (Slave→Master)    │                  │
-│              │                        │                  │
-│              │  + Analyze             │                  │
-│              │  + Log                 │                  │
-│              │  + Inject (optional)   │                  │
-│              └────────────────────────┘                  │
-└─────────────────────────────────────────────────────────┘
+         ┌────────────────── RS-485 Bus ──────────────────┐
+         │                                                │
+   A ────┤─────────────────────────────────────────────── │
+         │    differential voltage                        │
+   B ────┤─────────────────────────────────────────────── │
+         │                                                │
+  GND ───┤─────────────────────────────────────────────── │
+         │                                                │
+      Master            Slave 1          Slave 2       Slave N
+      (TX/RX)           (TX/RX)          (TX/RX)       (TX/RX)
 ```
 
-### Phần cứng cần thiết
+**Tại sao differential?** — Vì nhiễu tác động LÊN CẢ 2 dây giống nhau. Receiver đo **hiệu điện áp (V_A − V_B)**, nên nhiễu common-mode bị triệt tiêu:
 
-| Mode | Phần cứng | Ghi chú |
-|------|-----------|---------|
-| Passive | 1× USB-RS485 adapter | Tap vào bus, chỉ RX |
-| Inline Proxy | 2× USB-RS485 adapter | ComA nối Master, ComB nối Slaves |
+```
+Không nhiễu:           Có nhiễu (+2V):
+  A = 3.5V               A = 5.5V   (+2V)
+  B = 1.5V               B = 3.5V   (+2V)
+  V_A - V_B = 2.0V       V_A - V_B = 2.0V  ← vẫn giống!
+```
 
-> **Lưu ý:** Inline Proxy cắt đứt bus RS-485 thành 2 đoạn. Pi 5 trở thành cầu nối trung gian
-> — nếu Pi bị tắt hoặc crash, **Master mất liên lạc với Slaves**.
+### Half-duplex
+
+RS-485 2-wire là **half-duplex**: một thời điểm chỉ có 1 thiết bị được phép truyền (driver enable = HIGH). Tất cả thiết bị khác phải ở chế độ nhận.
+
+Đây là lý do Modbus RTU dùng mô hình **Master-Slave**: chỉ Master được quyền bắt đầu giao tiếp. Slave chỉ trả lời khi được hỏi.
+
+```
+Timeline:
+  ──────┬─────────┬──────────┬─────────┬──────────┬─────────┬──────
+        │  Req 1  │ gap  │  Rsp 1  │ gap  │  Req 2  │ gap
+        │ Master  │      │ Slave 1 │      │ Master  │
+        │ TX (DE) │      │ TX (DE) │      │ TX (DE) │
+  ──────┴─────────┴──────┴─────────┴──────┴─────────┴──────
+
+  Bus collision: nếu 2 thiết bị bật DE cùng lúc → tín hiệu bị phá → CRC fail
+```
+
+### Termination (điện trở đầu cuối)
+
+RS-485 cần **120Ω termination** ở 2 đầu bus để chống phản xạ sóng:
+
+```
+  Master ─[120Ω]── A ──────────────────── A ──[120Ω]── Slave cuối
+                   B ──────────────────── B
+```
+
+Nếu thiếu termination: tín hiệu bị phản xạ → **CRC errors ngẫu nhiên** (sniffer sẽ phát hiện).
+
+### Sniffer tap vào đâu?
+
+USB-RS485 adapter nối **song song** vào bus. Vì RS-485 cho phép **tối đa 32 unit loads** trên 1 bus, adapter thêm 1 unit load. Adapter chỉ bật chân **RX** (receiver enable), không bật **DE** (driver enable) → **không bao giờ truyền**, chỉ nghe.
+
+```
+  Master ──── A ───┬──────── Slave 1
+                   │
+  (sniffer) ──── A ┘   ← Tap: chỉ RX, DE=LOW
+```
 
 ---
 
-## 2. Mode 1: Passive Sniffer
+## 2. Tầng Data Link: Modbus RTU Frame
 
-### Nguyên lý hoạt động
+### Bản chất: không có start/stop delimiter
 
-USB-RS485 adapter nối **song song** (tap) vào bus RS-485, chỉ bật chân RX, không bật DE/RE (không truyền).
+**Đây là khác biệt lớn nhất** giữa Modbus RTU và các protocol khác:
+
+| Protocol | Frame delimiter |
+|----------|----------------|
+| HTTP | `\r\n\r\n` (header end) |
+| BACnet MS/TP | Preamble `0x55 0xFF` |
+| Modbus ASCII | `:` (start) + `\r\n` (end) |
+| **Modbus RTU** | **Không có!** Dùng im lặng (silence) |
+
+Modbus RTU frame bắt đầu và kết thúc bằng **khoảng im lặng ≥ 3.5 character times**. Đây là thách thức lớn nhất khi viết sniffer.
+
+### Frame structure
 
 ```
-Frame detection:
-  Raw bytes → Gap detector (3.5 char time) → Frame parser → CRC check → Health analyzer
+┌──────────────────────── Modbus RTU ADU ────────────────────────┐
+│                                                                │
+│  ┌──────────┬───────────────┬─────────────┬──────────────────┐ │
+│  │ Slave ID │ Function Code │   Data      │    CRC-16        │ │
+│  │ 1 byte   │   1 byte      │ 0-252 bytes │   2 bytes        │ │
+│  │ (0-247)  │  (1-127)      │             │ (LSB first)      │ │
+│  └──────────┴───────────────┴─────────────┴──────────────────┘ │
+│                                                                │
+│  Max ADU size: 256 bytes (1 + 1 + 252 + 2)                    │
+│  Min ADU size: 4 bytes   (1 + 1 + 0 + 2)                     │
+└────────────────────────────────────────────────────────────────┘
 ```
 
-**Modbus RTU frame format:**
+### Slave ID
+
 ```
-┌──────────┬───────────────┬─────────────┬──────────┐
-│ Slave ID │ Function Code │ Data (N B)  │ CRC-16   │
-│  1 byte  │    1 byte     │  0-252 B    │  2 bytes │
-└──────────┴───────────────┴─────────────┴──────────┘
-                                          LSB first
+  0         = Broadcast (tất cả slave nhận, KHÔNG được trả lời)
+  1 - 247   = Unicast (slave trả lời nếu address match)
+  248 - 255 = Reserved
 ```
 
-**Inter-frame gap:**
-- Modbus RTU phân tách frame bằng khoảng im lặng ≥ **3.5 character times**
-- 1 character = 11 bits (start + 8 data + parity + stop)
-- Ví dụ: @9600 baud → gap ≥ 4.0ms, @19200 → gap ≥ 2.0ms
+### Function Code
 
-### CRC-16 Modbus
+```
+  Bit 7 = 0 → Normal request/response
+  Bit 7 = 1 → Exception response (slave báo lỗi)
 
-Polynomial: `0xA001` (bit-reversed `0x8005`), Initial: `0xFFFF`, LSB-first.
+  Ví dụ:
+    FC = 0x03 → Read Holding Registers (normal)
+    FC = 0x83 → Exception response cho FC 0x03 (0x03 | 0x80)
+```
+
+### Timing rules (quan trọng cho sniffer)
+
+```
+Character time = 11 bits / baudrate
+  (1 start + 8 data + 1 parity + 1 stop = 11 bits)
+
+┌─────────┬────────────────┬───────────┬───────────┐
+│ Baudrate│ Char time      │ 1.5× (max │ 3.5× (min │
+│         │                │ intra-    │ inter-    │
+│         │                │ frame gap)│ frame gap)│
+├─────────┼────────────────┼───────────┼───────────┤
+│  9600   │ 1.146 ms       │ 1.719 ms  │ 4.010 ms  │
+│ 19200   │ 0.573 ms       │ 0.859 ms  │ 2.005 ms  │
+│ 38400   │ 0.286 ms       │ 0.430 ms  │ 1.750 ms* │
+│ 115200  │ 0.095 ms       │ 0.143 ms  │ 1.750 ms* │
+└─────────┴────────────────┴───────────┴───────────┘
+
+* Spec bổ sung: ≥38400 baud → dùng fixed 1.75ms thay vì tính
+```
+
+Ý nghĩa:
+- **Intra-frame gap < 1.5 char**: bytes TRONG cùng 1 frame phải liên tục
+- **Inter-frame gap ≥ 3.5 char**: khoảng im lặng GIỮA 2 frame
+
+```
+  ─── frame 1 ───      gap ≥ 3.5T      ─── frame 2 ───
+  [01 03 00 00 00 01 84 0A]    ~~~~    [01 03 02 00 64 B9 AF]
+  ▲                        ▲   ▲  ▲   ▲
+  │                        │   │  │   │
+  frame start              │  3.5T min │
+                     frame end     frame start
+```
+
+---
+
+## 3. CRC-16 Modbus
+
+### Tại sao cần CRC?
+
+RS-485 bus có thể bị:
+- Nhiễu điện từ (EMI) → bit bị lật
+- Phản xạ sóng (thiếu termination) → bit bị méo
+- Bus collision → 2 thiết bị nói cùng lúc → dữ liệu bị phá
+
+CRC-16 phát hiện **99.998%** lỗi bit (so với checksum chỉ ~50%).
+
+### Thuật toán (step by step)
+
+```
+Polynomial: 0xA001 (bit-reversed form of 0x8005)
+Initial value: 0xFFFF
+
+For each byte in [Slave ID, Function Code, Data...]:
+  1. CRC = CRC XOR byte
+  2. Repeat 8 times:
+     if CRC bit 0 = 1:
+       CRC = (CRC >> 1) XOR 0xA001
+     else:
+       CRC = CRC >> 1
+
+Result: 16-bit CRC, đặt LSB trước trong frame
+```
+
+**Ví dụ cụ thể** — tính CRC cho request "Read Holding Register 0 từ slave 1":
+
+```
+Data:     01  03  00  00  00  01
+          │   │   └──────┘  └──┘
+       slave FC  start_addr  quantity
+
+Step 1: CRC = 0xFFFF XOR 0x01 = 0xFFFE
+  → 8 iterations of shift/XOR...
+  → CRC after byte 0x01: 0xC0C1
+
+Step 2: CRC = 0xC0C1 XOR 0x03 = 0xC0C2
+  → 8 iterations...
+  → CRC after byte 0x03: 0x0141
+
+...continue for all bytes...
+
+Final CRC: 0x0A84
+
+In frame (LSB first): 84 0A
+
+Full frame: [01] [03] [00 00] [00 01] [84 0A]
+```
+
+### Lookup Table (tối ưu)
+
+Thay vì 8 shift/XOR per byte, tính sẵn bảng 256 entry:
 
 ```python
-def crc16_modbus(data: bytes) -> int:
+# Build table: mỗi entry = CRC contribution cho 1 byte value
+TABLE = [0] * 256
+for i in range(256):
+    crc = i
+    for _ in range(8):
+        crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    TABLE[i] = crc
+
+# Sử dụng: 1 lookup + 1 XOR per byte thay vì 8 iterations
+def crc16(data):
     crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            if crc & 0x0001:
-                crc = (crc >> 1) ^ 0xA001
-            else:
-                crc >>= 1
-    return crc  # 2 bytes, LSB first in frame
+    for b in data:
+        crc = (crc >> 8) ^ TABLE[(crc ^ b) & 0xFF]
+    return crc
 ```
 
-### Chẩn đoán Passive Sniffer
-
-| # | Code | Mô tả | Cách phát hiện |
-|---|------|--------|----------------|
-| 1 | `HIGH_CRC_ERRORS` | Dây kém, nhiễu điện | `bad_frames / total_frames > 5%` |
-| 2 | `JUNK_BYTES` | Bytes rác trên bus | Bytes không thuộc frame hợp lệ nào |
-| 3 | `BUS_SILENCE` | Bus im lặng > 5s | Không nhận được frame nào |
-| 4 | `HIGH_BUS_UTILIZATION` | Bus quá tải | `(total_bytes × 11) / (baudrate × elapsed) > 70%` |
-| 5 | `CHATTY_MASTER` | Master poll quá nhanh | Request rate > 50/s cho 1 slave |
-| 6 | `EXCEPTION_RESPONSES` | Slave báo lỗi | Exception response rate > 10% |
-| 7 | `SLOW_RESPONSE` | ⚠️ Heuristic | Dự đoán dựa trên khoảng cách giữa request và frame tiếp theo |
-| 8 | `SLAVE_NO_RESPONSE` | ⚠️ Heuristic | Request pending > 5s không có response tương ứng |
-
-> ⚠️ **Giới hạn Mode 1:** Vì passive sniffer nhìn thấy **tất cả traffic trên 1 dây**, không phân biệt được chiều (Master→Slave hay Slave→Master). Chẩn đoán #7 và #8 dùng heuristic — **có thể sai** khi bus bận nhiều slave.
+Performance: **~8× nhanh hơn** bit-by-bit. Quan trọng khi parse hàng nghìn frame/giây.
 
 ---
 
-## 3. Mode 2: Inline Proxy
+## 4. Kỹ thuật Sniffer: Bắt frame từ dòng byte thô
 
-### Nguyên lý hoạt động
+### Thách thức cốt lõi
 
-Pi 5 đứng giữa Master và Slaves, với 2 cổng COM:
-
-```
-ComA (Master side)                     ComB (Slave side)
-  ┌──────────────┐                    ┌──────────────┐
-  │ /dev/ttyUSB0 │◄── Master sends ──►│ /dev/ttyUSB1 │──► Forward to Slaves
-  │              │                    │              │
-  │              │◄── Forward back ◄──│              │◄── Slaves respond
-  └──────────────┘                    └──────────────┘
-```
-
-**Luồng xử lý:**
+Serial port cho ta **dòng byte liên tục**, không phân biệt ranh giới frame:
 
 ```
-1. ComA nhận request từ Master
-2. Ghi log: {direction: "M→S", slave_id, func_code, data, timestamp_A}
-3. Forward y nguyên sang ComB → Slaves nhận request
-4. ComB nhận response từ Slave
-5. Ghi log: {direction: "S→M", slave_id, func_code, data, timestamp_B}
-6. Forward y nguyên sang ComA → Master nhận response
-7. Tính: response_time = timestamp_B - timestamp_A
+Raw bytes từ serial port:
+  01 03 00 00 00 01 84 0A   01 03 02 00 64 B9 AF   01 04 00 ...
+  ─────── frame 1 ──────   ─────── frame 2 ──────   ─── frame 3 ...
+
+Nhưng ta nhận:
+  buffer: [01 03 00 00 00 01 84 0A 01 03 02 00 64 B9 AF 01 04 00 ...]
+           ^-- không biết frame 1 kết thúc ở đâu!
 ```
 
-### Chẩn đoán nâng cao (chỉ có ở Mode 2)
-
-Ngoài 8 chẩn đoán của Mode 1, Inline Proxy thêm **7 chẩn đoán mới**:
-
-| # | Code | Mô tả | Cách phát hiện | Giá trị |
-|---|------|--------|----------------|---------|
-| 9 | `EXACT_RESPONSE_TIME` | Đo chính xác response time | `ts_response_ComB − ts_request_ComA` | Không cần heuristic |
-| 10 | `NO_RESPONSE_EXACT` | Slave thật sự không trả lời | Request từ ComA → timeout trên ComB | 100% chính xác, không false positive |
-| 11 | `DIRECTION_VIOLATION` | Slave gửi frame không được hỏi | Frame từ ComB mà không có request tương ứng từ ComA | Slave bị lỗi firmware |
-| 12 | `LATE_RESPONSE` | Response đến sau timeout của Master | Master đã gửi request mới (trên ComA) trước khi slave trả lời (trên ComB) | Slave quá chậm |
-| 13 | `BROADCAST_RESPONSE` | Slave trả lời broadcast (cấm) | Request broadcast (slave=0) từ ComA, nhưng có response từ ComB | Vi phạm spec |
-| 14 | `DUPLICATE_SLAVE_ID` | 2 slave cùng địa chỉ | 1 request → 2+ responses trên ComB | Cấu hình sai |
-| 15 | `FRAME_CORRUPTION` | Frame bị hỏng trên 1 chiều | CRC OK trên ComA nhưng fail trên ComB (hoặc ngược lại) | Dây 1 chiều bị lỗi |
-
-### Request-Response Matching (chính xác)
-
-Passive mode dùng heuristic để ghép request-response. Inline proxy **biết chắc chắn**:
+### State Machine: Gap-based detection
 
 ```
-ComA nhận frame → đó là REQUEST (từ Master)
-ComB nhận frame → đó là RESPONSE (từ Slave)
+                    ┌──────────────────────────────┐
+                    │                              │
+                    ▼                              │
+              ┌───────────┐    byte received       │
+     ─────►   │  IDLE     ├──────────────────►┌────┴──────┐
+   (power on) │ buf=empty │                   │COLLECTING │
+              └───────────┘                   │ buf += b  │
+                    ▲                         │ ts = now  │
+                    │         gap detected    └────┬──────┘
+                    │       (now - ts > 3.5T)      │
+                    │              │                │
+                    │         ┌────▼──────┐        │
+                    │         │ TRY_PARSE │        │
+                    │         │           │        │
+                    │         └────┬──────┘        │
+                    │              │                │
+                    │    ┌─────────┴──────────┐     │
+                    │    │                    │     │
+                    │   len ≥ 4?             len < 4
+                    │    │                    │     │
+                    │   YES                  NO    │
+                    │    │                    │     │
+                    │  Parse frame          Junk   │
+                    │  Check CRC           bytes   │
+                    │    │                    │     │
+                    └────┴────────────────────┘     │
+                         buf = clear               │
+                         ◄─────────────────────────┘
+                              next byte
 ```
 
-Bảng ghép cặp:
-
-```
-Request Queue:                    Response Queue:
-┌──────────────────────────┐     ┌──────────────────────────┐
-│ ts=0.000  S=1 FC=03      │ ──► │ ts=0.012  S=1 FC=03      │  ✓ matched, RT=12ms
-│ ts=0.050  S=2 FC=03      │ ──► │ ts=0.095  S=2 FC=03      │  ✓ matched, RT=45ms
-│ ts=0.100  S=3 FC=03      │ ──► │ (timeout 1000ms)         │  ✗ NO_RESPONSE_EXACT
-│ ts=0.150  S=1 FC=06      │ ──► │ ts=0.155  S=1 FC=86      │  ⚠ EXCEPTION (Illegal Addr)
-└──────────────────────────┘     └──────────────────────────┘
-```
-
-### Kỹ thuật Forward (Chi tiết)
-
-**Yêu cầu quan trọng:**
-- Forward phải **trong suốt** (transparent) — Master và Slave không biết Pi ở giữa
-- **Không được thêm delay** đáng kể (< 1ms)
-- Forward **từng byte** hoặc **từng frame** — cần chọn chiến lược phù hợp
-
-**Chiến lược 1: Byte-level forward (đơn giản, latency thấp)**
+### Pseudo-code chi tiết
 
 ```python
-# Pseudo-code
-async def forward_loop(src_port, dst_port, direction):
-    while True:
-        data = src_port.read(256)  # non-blocking, timeout=1ms
-        if data:
-            dst_port.write(data)   # forward ngay lập tức
-            analyzer.feed(data, direction)  # phân tích song song
+class FrameParser:
+    def __init__(self, baudrate):
+        self.gap_threshold = 3.5 * 11 / baudrate  # seconds
+        self.buf = bytearray()
+        self.last_byte_ts = 0
+
+    def feed(self, byte, timestamp):
+        # 1. Kiểm tra gap
+        if self.buf and (timestamp - self.last_byte_ts) > self.gap_threshold:
+            # Gap detected → thử parse buffer hiện tại
+            self.try_parse()
+
+        # 2. Thêm byte vào buffer
+        if not self.buf:
+            self.frame_start_ts = timestamp
+        self.buf.append(byte)
+        self.last_byte_ts = timestamp
+
+    def try_parse(self):
+        data = bytes(self.buf)
+        self.buf.clear()
+
+        if len(data) < 4:        # Quá ngắn → junk
+            self.junk_count += len(data)
+            return
+
+        if len(data) > 256:      # Quá dài → junk
+            self.junk_count += len(data)
+            return
+
+        # Parse components
+        slave_id = data[0]
+        func_code = data[1]
+        payload = data[2:-2]
+        crc_received = data[-2] | (data[-1] << 8)  # LSB first
+        crc_computed = crc16(data[:-2])
+
+        frame = Frame(
+            slave_id=slave_id,
+            function_code=func_code,
+            data=payload,
+            crc_ok=(crc_received == crc_computed),
+            timestamp=self.frame_start_ts,
+        )
+
+        self.on_frame(frame)
 ```
 
-- ✅ Latency rất thấp (~0.1ms)
-- ✅ Đơn giản, robust
-- ❌ Không biết ranh giới frame cho đến khi gap xảy ra
+### Vấn đề thực tế với serial port
 
-**Chiến lược 2: Frame-level forward (phức tạp hơn, có thể inject)**
+**Problem 1: OS buffering**
+Hệ điều hành buffer bytes trước khi đưa lên userspace. Có thể nhận cục 50 bytes cùng lúc thay vì từng byte.
+
+**Giải pháp:** Dùng `serial.timeout=0.001` (1ms) → read thường xuyên, giảm buffering. Đo gap dựa trên `time.perf_counter()` thay vì dựa vào timing của read().
+
+**Problem 2: Baud rate mismatch**
+Nếu sniffer đặt baud rate khác bus → **mọi byte đều garbage**.
+
+**Giải pháp:** Sniffer mode detect: thử nhiều baud rate, đếm frame valid ở mỗi rate:
+
+```
+9600:   0 valid frames, 847 junk bytes
+19200:  0 valid frames, 412 junk bytes
+38400:  127 valid frames, 3 junk bytes  ← ĐÚNG!
+```
+
+**Problem 3: Partial frame ở đầu/cuối capture**
+Bắt đầu capture giữa chừng 1 frame → bytes đầu là rác.
+
+**Giải pháp:** Bỏ frame đầu tiên nếu CRC fail (đợi gap đầu tiên để sync).
+
+---
+
+## 5. Kỹ thuật Diagnostics: 8 quy tắc chẩn đoán
+
+### Bản chất: Pattern Recognition trên stream of frames
+
+Sniffer thu thập stream of frames, mỗi frame có attributes:
+```
+{timestamp, slave_id, function_code, data_length, crc_ok, is_exception}
+```
+
+Diagnostic engine chạy **8 quy tắc** trên aggregate data:
+
+### Rule 1: HIGH_CRC_ERRORS
+
+```
+Metric:    bad_crc_count / total_frame_count × 100
+
+Trigger:   > 5% → warning
+           > 15% → critical
+
+Nguyên nhân:
+  • Dây A/B bị đứt hoặc tiếp xúc kém
+  • Thiếu termination 120Ω
+  • Baud rate mismatch giữa các thiết bị
+  • Nhiễu EMI (VFD, motor, relay gần bus)
+  • Bus quá dài (>1200m @9600 hoặc >700m @19200)
+
+Cách sniffer phát hiện:
+  Mỗi frame nhận được → tính CRC → so với 2 byte cuối
+  Nếu không khớp → bad_crc_count++
+
+Ví dụ:
+  Nhận: [01 03 02 00 64 B9 FF]
+  Tính CRC(01 03 02 00 64) = 0xAFB9
+  Trong frame: 0xFFB9 ← KHÔNG KHỚP → CRC error
+```
+
+### Rule 2: JUNK_BYTES
+
+```
+Metric:    junk_bytes / total_bytes × 100
+
+Trigger:   > 2% → warning
+           > 10% → critical
+
+Bản chất:
+  Bytes nhận được mà KHÔNG thuộc frame nào:
+    • Buffer < 4 bytes khi gap xảy ra
+    • Buffer > 256 bytes (Modbus RTU max)
+    • Bytes random do noise
+
+Ví dụ:
+  Nhận: [FF FF 01 03 00 00 00 01 84 0A]
+         ^^^^^ junk (gap trước → flush → chỉ 2 bytes → junk)
+```
+
+### Rule 3: BUS_SILENCE
+
+```
+Metric:    max(gap between consecutive frames) in milliseconds
+
+Trigger:   > 5000ms → warning
+           > 15000ms → critical
+
+Bản chất:
+  Theo dõi khoảng cách giữa frame cuối và frame mới.
+  Nếu bus im lặng quá lâu → Master có thể offline.
+
+  Lưu ý: khác với inter-frame gap 3.5T (đó là BÌNH THƯỜNG).
+  BUS_SILENCE nói về im lặng BẤT THƯỜNG (giây, không phải ms).
+```
+
+### Rule 4: HIGH_BUS_UTILIZATION
+
+```
+Metric:    (total_bytes × 11 bits/char) / (baudrate × elapsed_seconds) × 100
+
+Trigger:   > 70% → warning
+           > 90% → critical
+
+Bản chất:
+  RS-485 half-duplex → bandwidth bị chia đôi (vì phải đợi).
+  Bus utilization > 70% → ít "chỗ trống" → slave có thể bị timeout.
+
+Ví dụ @9600 baud, 60s capture:
+  Total bytes: 48000
+  Bits used: 48000 × 11 = 528000
+  Bandwidth: 9600 × 60 = 576000
+  Utilization: 528000/576000 = 91.7% → CRITICAL
+```
+
+### Rule 5: CHATTY_MASTER
+
+```
+Metric:    requests_to_slave_X / elapsed_seconds
+
+Trigger:   > 50 requests/s → warning per slave
+
+Bản chất:
+  Nếu Master poll 1 slave quá nhanh, slave có thể không kịp xử lý.
+  Cũng chiếm quá nhiều bandwidth → các slave khác bị chậm.
+
+  Ví dụ: PLC poll energy meter 100 lần/giây → meter respond chậm dần
+           → timeout → Master nghĩ meter offline
+```
+
+### Rule 6: EXCEPTION_RESPONSES
+
+```
+Metric:    exception_responses / total_responses × 100
+
+Trigger:   > 10% → warning
+           > 25% → critical
+
+Bản chất:
+  Exception response có bit 7 set trong function code:
+    Normal: FC = 0x03 (Read Holding Registers)
+    Exception: FC = 0x83 = 0x03 | 0x80
+
+  Kèm theo exception code:
+    01 = Illegal Function    → slave không hỗ trợ FC
+    02 = Illegal Data Addr   → đọc register không tồn tại
+    03 = Illegal Data Value  → ghi giá trị ngoài phạm vi
+    04 = Device Failure      → lỗi phần cứng slave
+
+  Sniffer đếm exception BY slave ID và BY exception code
+  → biết slave nào bị lỗi gì nhiều nhất.
+```
+
+### Rule 7: SLOW_RESPONSE (Passive mode — heuristic)
+
+```
+Metric:    estimated response time per slave
+
+Trigger:   > 500ms → warning
+
+Bản chất (heuristic):
+  Passive sniffer KHÔNG biết chắc frame nào là request, frame nào là response.
+  Dùng heuristic:
+    1. Frame match request pattern (8 bytes, FC=01-06) → ghi nhận pending request
+    2. Frame tiếp theo cùng slave_id → coi là response
+    3. Response time ≈ ts_response - ts_request
+
+  ⚠️ Sai khi:
+    • Bus có nhiều slave → frame chen giữa
+    • Broadcast request → không có response
+```
+
+### Rule 8: SLAVE_NO_RESPONSE (Passive mode — heuristic)
+
+```
+Metric:    pending request > 5 seconds without matching response
+
+Trigger:   > 5000ms → warning
+
+Bản chất (heuristic):
+  Ghi nhận request tới slave X.
+  Nếu >5s không thấy response từ slave X → coi là no response.
+
+  ⚠️ Sai khi:
+    • Slave respond nhưng CRC fail → sniffer thấy bad frame, không match
+    • Response bị parser lỗi (junk)
+```
+
+---
+
+## 6. Inline Proxy: Kỹ thuật MITM
+
+### Bản chất: tách bus thành 2 segment
+
+```
+TRƯỚC (bus bình thường):
+  Master ════════════════════════════════════ Slaves
+                   1 segment, tất cả trên 1 bus
+
+SAU (inline proxy):
+  Master ════ ComA ═══ [Pi] ═══ ComB ════ Slaves
+              segment 1          segment 2
+```
+
+Pi đọc từ ComA, gửi sang ComB (và ngược lại). **Vì ComA chỉ kết nối Master, ComB chỉ kết nối Slaves**, ta biết chắc:
+
+```
+  Frame từ ComA RX = Master gửi = REQUEST
+  Frame từ ComB RX = Slave gửi  = RESPONSE
+```
+
+### Forward strategy: Byte-level (recommended)
 
 ```python
-# Pseudo-code  
-async def forward_loop(src_port, dst_port, direction):
-    parser = ModbusFrameParser(baudrate=9600)
+async def forward(src, dst):
+    """Forward mỗi byte ngay khi nhận được."""
     while True:
-        data = src_port.read(256)
+        data = src.read(256)     # đọc tối đa 256 bytes
         if data:
-            frames = parser.feed_and_get_frames(data)
-            for frame in frames:
-                # Có thể modify frame trước khi forward
-                if should_inject(frame):
-                    dst_port.write(modified_frame)
-                else:
-                    dst_port.write(frame.raw)
-                analyzer.ingest(frame, direction)
+            dst.write(data)      # gửi ngay, không đợi
+            parser.feed(data)    # phân tích song song
 ```
 
-- ✅ Biết rõ ranh giới frame → có thể inject/modify
-- ❌ Thêm delay ~3.5 char times (đợi gap để xác nhận frame kết thúc)
-- ❌ Phức tạp hơn, risk buffer overflow khi bus bận
+**Tại sao byte-level chứ không frame-level?**
 
-**Khuyến nghị:** Dùng **Chiến lược 1** (byte-level) để đảm bảo transparent. Phân tích frame trong thread riêng.
+| | Byte-level | Frame-level |
+|---|---|---|
+| Latency | ~0.1ms | +3.5 char times (đợi gap) |
+| Transparency | 100% | 99% (thêm gap delay) |
+| Complexity | Thấp | Cao (đợi frame hoàn chỉnh) |
+| Can inject? | Không | Có |
+| Can modify? | Không | Có |
 
-### Kiến trúc phần mềm Inline Proxy
+Frame-level chỉ cần khi muốn **inject** hoặc **modify** frame trước khi forward. Cho mục đích diagnostics, byte-level là tối ưu.
 
-```
-                    ┌─────────────────────────────────────┐
-                    │            InlineProxy               │
-                    │                                     │
-    /dev/ttyUSB0    │  ┌─────────┐     ┌─────────┐       │  /dev/ttyUSB1
-  ◄─────────────────┤──│ ComA RX │────►│ ComB TX │───────┤─────────────────►
-  Master            │  │         │  │  │         │       │          Slaves
-  ─────────────────►├──│ ComA TX │◄───│ ComB RX │───────┤◄─────────────────
-                    │  └─────────┘  │  └─────────┘       │
-                    │               │                     │
-                    │          ┌────┴────┐                │
-                    │          │Analyzer │                │
-                    │          │ + Logs  │                │
-                    │          └─────────┘                │
-                    └─────────────────────────────────────┘
-```
-
----
-
-## 4. Bảng so sánh chẩn đoán
-
-| Chẩn đoán | Passive (1 COM) | Inline Proxy (2 COM) | Ghi chú |
-|-----------|:-:|:-:|---------|
-| CRC errors | ✅ | ✅ | Inline phân biệt được lỗi ở chiều nào |
-| Junk bytes | ✅ | ✅ | Inline biết junk từ Master hay Slave |
-| Bus silence | ✅ | ✅ | — |
-| Bus utilization | ✅ | ✅ | Inline tính riêng cho từng chiều |
-| Chatty master | ✅ | ✅ | — |
-| Exception rate | ✅ | ✅ | — |
-| **Response time** | ⚠️ Heuristic | ✅ **Chính xác** | Inline đo `ts_B − ts_A` |
-| **No response** | ⚠️ Heuristic | ✅ **Chính xác** | Không false positive |
-| Direction violation | ❌ | ✅ | Slave tự gửi frame |
-| Late response | ❌ | ✅ | Response sau timeout |
-| Broadcast response | ❌ | ✅ | Vi phạm Modbus spec |
-| Duplicate slave ID | ❌ | ✅ | 2+ response cho 1 request |
-| Frame corruption | ❌ | ✅ | CRC OK 1 chiều, fail chiều kia |
-| **Frame injection** | ❌ | ✅ (opt) | Test response của slave |
-
----
-
-## 5. Chi tiết kỹ thuật phân tích frame
-
-### Modbus RTU Function Codes
-
-| FC | Tên | Request PDU | Response PDU |
-|----|-----|-------------|--------------|
-| `0x01` | Read Coils | `addr(2) + qty(2)` = 8B | `byte_count(1) + data(N)` |
-| `0x02` | Read Discrete Inputs | `addr(2) + qty(2)` = 8B | `byte_count(1) + data(N)` |
-| `0x03` | Read Holding Registers | `addr(2) + qty(2)` = 8B | `byte_count(1) + data(N)` |
-| `0x04` | Read Input Registers | `addr(2) + qty(2)` = 8B | `byte_count(1) + data(N)` |
-| `0x05` | Write Single Coil | `addr(2) + value(2)` = 8B | Echo request |
-| `0x06` | Write Single Register | `addr(2) + value(2)` = 8B | Echo request |
-| `0x0F` | Write Multiple Coils | `addr(2) + qty(2) + bc(1) + data(N)` | `addr(2) + qty(2)` = 8B |
-| `0x10` | Write Multiple Registers | `addr(2) + qty(2) + bc(1) + data(N)` | `addr(2) + qty(2)` = 8B |
-
-### Exception Response Format
-
-Khi slave trả lỗi, function code có **bit 7 set** (OR with `0x80`):
+### Request-Response Matching (chính xác 100%)
 
 ```
-Request:   [01] [03] [00 00] [00 01] [84 0A]     ← Read Holding Reg #0, qty=1
-Exception: [01] [83] [02] [C0 F1]                 ← FC=0x83 (0x03|0x80), ExCode=0x02
-                                                     → "Illegal Data Address"
+Timeline (inline proxy biết direction):
+
+  ComA RX:   ├── [01 03 00 00 00 01 84 0A] ──────────────────────────────
+  (Master)   │   ts_A = 0.000s
+             │   → Forward to ComB TX
+             │
+  ComB RX:   ├────────────────────────── [01 03 02 00 64 B9 AF] ──────
+  (Slave)    │                           ts_B = 0.012s
+             │                           → Forward to ComA TX
+             │
+  Match:     Slave 1, FC 03
+             Response time = ts_B - ts_A = 12ms ← CHÍNH XÁC
 ```
 
-| Exception Code | Tên | Nguyên nhân phổ biến |
-|:-:|------|----------------------|
-| 01 | Illegal Function | Slave không hỗ trợ FC này |
-| 02 | Illegal Data Address | Đọc/ghi register không tồn tại |
-| 03 | Illegal Data Value | Giá trị ghi ngoài phạm vi |
-| 04 | Server Device Failure | Lỗi nội bộ slave (hardware) |
-| 05 | Acknowledge | Slave đang xử lý, chờ |
-| 06 | Server Device Busy | Slave bận, thử lại sau |
+So với passive sniffer:
+```
+  Passive:   ├── [01 03 00 00 00 01 84 0A] ── [01 03 02 00 64 B9 AF] ──
+  (1 port)   │   Cùng port, cùng direction → PHẢI ĐOÁN cái nào là request
+             │   Có thể nhầm nếu bus bận
+```
 
-### Timing Constraints (theo Modbus Spec)
+### 7 chẩn đoán mới chỉ có ở inline proxy
+
+| # | Code | Bản chất | Passive có? |
+|---|------|----------|:-:|
+| 1 | `EXACT_RESPONSE_TIME` | `ts_ComB − ts_ComA` → ms chính xác | ❌ (heuristic) |
+| 2 | `NO_RESPONSE_EXACT` | Request trên ComA, timeout trên ComB | ❌ (heuristic) |
+| 3 | `DIRECTION_VIOLATION` | Frame từ ComB mà không có request từ ComA | ❌ |
+| 4 | `LATE_RESPONSE` | Response đến sau khi Master đã gửi request mới | ❌ |
+| 5 | `BROADCAST_RESPONSE` | Request broadcast (slave=0) từ ComA → có response từ ComB | ❌ |
+| 6 | `DUPLICATE_SLAVE_ID` | 1 request → 2+ responses trên ComB | ❌ |
+| 7 | `FRAME_CORRUPTION_DIR` | CRC OK trên ComA nhưng fail trên ComB | ❌ |
+
+### Phát hiện DIRECTION_VIOLATION
 
 ```
-Inter-character timeout:  1.5 × character_time (bytes trong 1 frame phải liên tục)
-Inter-frame silence:      3.5 × character_time (gap giữa 2 frame)
+Normal flow:
+  ComA: REQ(slave=1, FC=03)  →  ComB: RSP(slave=1, FC=03)  ✓
 
-@9600:  1 char = 11/9600 = 1.146ms → gap = 4.01ms
-@19200: 1 char = 11/19200 = 0.573ms → gap = 2.01ms  
-@38400: 1 char = 11/38400 = 0.286ms → gap = 1.75ms (minimum)
-@115200: spec says use fixed 1.75ms
+Violation:
+  ComA: (nothing)             →  ComB: RSP(slave=1, FC=03)  ✗
+  Slave 1 tự gửi frame không được hỏi!
+  → Firmware bug hoặc slave bị reset
+```
+
+### Phát hiện DUPLICATE_SLAVE_ID
+
+```
+  ComA: REQ(slave=5, FC=03)
+  ComB: RSP(slave=5, FC=03, data=[00 64])     ← device A trả lời
+  ComB: RSP(slave=5, FC=03, data=[01 F4])     ← device B cũng trả lời!
+
+  → 2 thiết bị cùng address 5 → bus collision → CRC errors
+```
+
+### Phát hiện BROADCAST_RESPONSE
+
+```
+  ComA: REQ(slave=0, FC=06, reg=100, val=1)   ← broadcast write
+  ComB: RSP(slave=0, FC=06, reg=100, val=1)   ← AI ĐÓ TRẢ LỜI!
+
+  → Vi phạm Modbus spec: "Slaves shall not respond to broadcast"
+  → Firmware bug trên slave
 ```
 
 ---
 
-## 6. Cài đặt và sử dụng
-
-### Mode 1: Passive Sniffer
-
-```bash
-# Standalone CLI
-python3 modbus_sniffer.py --port /dev/ttyUSB0 --baud 9600 --duration 60 --frames
-
-# Dashboard (web UI)
-python3 dashboard.py --config config.yaml
-# → http://<ip>:8766
-```
-
-### Mode 2: Inline Proxy (chưa implement)
-
-> **Trạng thái:** Thiết kế sẵn, chưa implement. Cần thêm `modbus_proxy.py`.
-
-Lệnh dự kiến:
-```bash
-python3 modbus_proxy.py \
-  --master-port /dev/ttyUSB0 \
-  --slave-port /dev/ttyUSB1 \
-  --baud 9600 \
-  --duration 120
-```
-
-### Config file (`config.yaml`)
-
-```yaml
-serial:
-  port: /dev/ttyUSB0        # Mode 1: sniffer port
-  baudrate: 9600
-  parity: "N"
-  stopbits: 1
-
-# Mode 2 (khi implement proxy)
-proxy:
-  enabled: false
-  master_port: /dev/ttyUSB0  # Nối Master
-  slave_port: /dev/ttyUSB1   # Nối Slaves
-  forward_strategy: "byte"   # "byte" hoặc "frame"
-
-sniffer:
-  enabled: true
-  diag_interval_s: 5
-
-api:
-  port: 8766
-```
-
-### Đấu nối phần cứng Mode 2
+## 7. So sánh Passive vs Inline
 
 ```
-┌──────────┐         ┌─────────────────────────┐         ┌──────────┐
-│          │  A(+)   │  USB-RS485 #1 (ComA)    │         │          │
-│  MASTER  ├────────►│  /dev/ttyUSB0           │         │  SLAVE 1 │
-│  PLC /   │  B(-)   │  Pi 5 nhận request      │         │  VFD /   │
-│  SCADA   ├────────►│                         │         │  Meter   │
-│          │  GND    │         forward ──────┐ │         │          │
-│          ├────────►│                       │ │         │          │
-└──────────┘         │  USB-RS485 #2 (ComB)  │ │         └──────────┘
-                     │  /dev/ttyUSB1         ▼ │  A(+)    ┌──────────┐
-                     │  Pi 5 gửi tới slaves  ──┼────────►│  SLAVE 2 │
-                     │                         │  B(-)   │          │
-                     │  ◄── response ──────────┼────────►│          │
-                     └─────────────────────────┘  GND    └──────────┘
+                    ┌──────────────────┬──────────────────────┐
+                    │  Passive (1 COM) │  Inline Proxy (2 COM)│
+┌───────────────────┼──────────────────┼──────────────────────┤
+│ Ảnh hưởng bus     │ Không            │ Có (nếu Pi crash →  │
+│                   │                  │ bus mất kết nối)     │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Phần cứng         │ 1× USB-RS485     │ 2× USB-RS485         │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Biết chiều frame  │ ❌ (đoán)        │ ✅ (chắc chắn)       │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Response time     │ ⚠️ Heuristic     │ ✅ Chính xác (µs)    │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ No response       │ ⚠️ False positive│ ✅ 100% confirmed    │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Diagnose per-     │ ❌               │ ✅ (CRC fail 1 chiều)│
+│ segment wiring    │                  │                      │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Safe for prod     │ ✅ (không ảnh    │ ⚠️ (Pi là SPOF)      │
+│                   │  hưởng bus)      │                      │
+├───────────────────┼──────────────────┼──────────────────────┤
+│ Usecase           │ Monitor liên tục │ Debug deep problem   │
+│                   │ 24/7             │ phải tạm dừng bus    │
+└───────────────────┴──────────────────┴──────────────────────┘
 ```
 
-> ⚠️ **Quan trọng:** Đảm bảo GND chung giữa 2 adapter và tất cả các thiết bị.
+### Khi nào dùng mode nào?
+
+**Passive Sniffer** — dùng khi:
+- Monitor bus 24/7 không muốn ảnh hưởng
+- Kiểm tra sức khỏe tổng quan (CRC, utilization, exception rate)
+- Tìm slave nào gây nhiều lỗi nhất
+
+**Inline Proxy** — dùng khi:
+- Cần đo response time chính xác
+- Nghi ngờ slave không trả lời nhưng passive không confirm được
+- Debug firmware issue (direction violation, broadcast response)
+- Tìm 2 slave cùng address
+- Tìm đoạn dây nào bị lỗi (so sánh CRC 2 chiều)
 
 ---
 
-## Phụ lục: Tóm tắt kiến trúc code
+## Phụ lục A: Sơ đồ đấu nối phần cứng Inline Proxy
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    Raspberry Pi 5                                 │
+│                                                                  │
+│   USB Port 1          USB Port 2                                 │
+│   ┌─────────┐        ┌─────────┐                                │
+│   │USB-RS485│        │USB-RS485│                                 │
+│   │ CH340   │        │ CH340   │                                 │
+│   │ ComA    │        │ ComB    │                                 │
+│   │/ttyUSB0 │        │/ttyUSB1 │                                 │
+│   └────┬────┘        └────┬────┘                                 │
+│        │                  │                                      │
+└────────┼──────────────────┼──────────────────────────────────────┘
+         │                  │
+    ┌────┴────┐        ┌────┴────┐
+    │ A(+)    │        │ A(+)    │
+    │ B(-)    │        │ B(-)    │
+    │ GND     │        │ GND     │
+    └────┬────┘        └────┬────┘
+         │                  │
+    ═════╪══════════   ═════╪══════════════════
+    Segment 1 (Master)  Segment 2 (Slaves)
+    ═════╪══════════   ═════╪════╪════╪═══════
+         │                  │    │    │
+    ┌────┴────┐        ┌────┴┐ ┌─┴─┐ ┌┴────┐
+    │ MASTER  │        │ S1  │ │S2 │ │ S3  │
+    │ PLC/    │        │     │ │   │ │     │
+    │ SCADA   │        │     │ │   │ │     │
+    └─────────┘        └─────┘ └───┘ └─────┘
+
+    ⚠️ Mỗi segment cần termination 120Ω ở 2 đầu
+    ⚠️ GND phải chung giữa tất cả thiết bị
+```
+
+## Phụ lục B: Cấu trúc source code
 
 ```
 tools/modbus/
-├── modbus_sniffer.py    ← CRC-16, FrameParser, HealthAnalyzer, ModbusSniffer
-├── dashboard.py         ← FastAPI server (port 8766)
-├── modbus_proxy.py      ← [TODO] Inline proxy với 2 COM ports
-├── config.yaml          ← Cấu hình serial + sniffer + proxy
+├── modbus_sniffer.py    ← [521 lines] CRC-16, FrameParser, HealthAnalyzer, ModbusSniffer
+│                           • _crc16()          — CRC-16 Modbus lookup table
+│                           • ModbusFrameParser  — gap-based state machine
+│                           • ModbusHealthAnalyzer — 8 diagnostic rules
+│                           • ModbusSniffer      — async serial reader + diagnostics
+│
+├── modbus_proxy.py      ← [450 lines] Inline Proxy, DirectionalFrame, ProxyAnalyzer
+│                           • ProxyHealthAnalyzer — extends base with 7 more rules
+│                           • ModbusProxy         — dual COM forward + analyze
+│                           • DirectionalFrame    — frame with direction context
+│
+├── dashboard.py         ← [160 lines] FastAPI server
+│                           • /api/sniffer/report → JSON health report
+│                           • /ws → WebSocket realtime events
+│
+├── config.yaml
 ├── requirements.txt
 ├── modbus-rtu-tools.service
 └── static/
-    └── index.html       ← Dashboard UI (dark theme, 3 tabs)
+    └── index.html       ← [310 lines] Dark-themed dashboard
 ```
