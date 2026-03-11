@@ -1,38 +1,36 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import {
-  LayoutDashboard, Activity, Map, Users, Eye, BarChart2,
-  FileText, Clock, Settings, Zap, Wifi,
-  ChevronRight, AlertTriangle,
+  LayoutDashboard, Activity, Cable, Replace, Users, Eye, TrendingUp,
+  FileText, Clock, Settings, Zap, AlertTriangle, Download,
+  ChevronRight, ChevronLeft,
 } from 'lucide-react';
 
 const API = '/api';
 
 const NAV = [
   { group: 'OVERVIEW', items: [
-    { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-    { path: '/device-health', label: 'Device Health', icon: Activity },
+    { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { page: 'device-health', label: 'Device Health', icon: Activity },
   ]},
   { group: 'BACNET', items: [
-    { path: '/devices', label: 'Devices', icon: Wifi },
-    { path: '/mappings', label: 'Mappings', icon: Map },
-    { path: '/groups', label: 'Groups', icon: Users },
-    { path: '/monitor', label: 'Monitor', icon: Eye },
+    { page: 'devices', label: 'Devices', icon: Cable },
+    { page: 'mappings', label: 'Mappings', icon: Replace },
+    { page: 'groups', label: 'Groups', icon: Users },
+    { page: 'monitor', label: 'Monitor', icon: Eye },
   ]},
   { group: 'ANALYTICS', items: [
-    { path: '/charts', label: 'Charts', icon: BarChart2 },
-    { path: '/logs', label: 'Logs', icon: FileText },
-    { path: '/scheduler', label: 'Scheduler', icon: Clock },
-    { path: '/anomaly', label: 'Anomaly', icon: AlertTriangle },
+    { page: 'charts', label: 'Charts', icon: TrendingUp },
+    { page: 'logs', label: 'Logs', icon: FileText },
+    { page: 'scheduler', label: 'Scheduler', icon: Clock },
+    { page: 'anomaly', label: 'Anomaly', icon: AlertTriangle },
+    { page: 'export', label: 'Export', icon: Download },
   ]},
   { group: 'CONFIG', items: [
-    { path: '/settings', label: 'Settings', icon: Settings },
+    { page: 'settings', label: 'Settings', icon: Settings },
   ]},
 ];
 
-export function Sidebar() {
-  const navigate = useNavigate();
-  const location = useLocation();
+export function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
   const [status, setStatus] = useState(null);
 
   useEffect(() => {
@@ -52,37 +50,49 @@ export function Sidebar() {
   const mqttOk = status?.mqtt_connected;
 
   return (
-    <aside className="w-[200px] shrink-0 flex flex-col bg-bg-secondary border-r border-border h-screen">
-      {/* Logo */}
-      <div className="px-4 pt-5 pb-4 border-b border-border">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center">
+    <aside
+      className={`hidden md:flex flex-col bg-bg-secondary border-r border-border h-screen fixed top-0 left-0 z-30 transition-all duration-300 ${
+        collapsed ? 'w-16' : 'w-[220px]'
+      }`}
+    >
+      {/* Logo + collapse toggle */}
+      <div className="px-3 pt-4 pb-3 border-b border-border flex items-center justify-between">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shrink-0">
             <Zap size={16} className="text-white" />
           </div>
-          <div>
-            <div className="text-sm font-bold text-white tracking-tight">Gateway <span className="text-accent-primary">V2</span></div>
-            <div className="text-[10px] text-text-muted">BACnet → MQTT</div>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-white tracking-tight truncate">Gateway <span className="text-accent-primary">V2</span></div>
+              <div className="text-[10px] text-text-muted">BACnet → MQTT</div>
+            </div>
+          )}
         </div>
+        <button onClick={onToggle} className="p-1 rounded text-text-muted hover:text-white hover:bg-white/10 transition-colors shrink-0">
+          {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+        </button>
       </div>
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
         {NAV.map(group => (
           <div key={group.group}>
-            <div className="px-2 mb-1 text-[9px] font-bold tracking-widest text-text-muted uppercase">{group.group}</div>
+            {!collapsed && (
+              <div className="px-2 mb-1 text-[9px] font-bold tracking-widest text-text-muted uppercase">{group.group}</div>
+            )}
             {group.items.map(item => {
-              const active = location.pathname === item.path;
+              const active = activePage === item.page;
               return (
-                <button key={item.path} onClick={() => navigate(item.path)}
+                <button key={item.page} onClick={() => onNavigate(item.page)}
+                  title={collapsed ? item.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs font-medium transition-all group ${
                     active
                       ? 'bg-accent-primary/15 text-accent-primary'
                       : 'text-text-secondary hover:text-white hover:bg-white/[0.04]'
-                  }`}>
+                  } ${collapsed ? 'justify-center' : ''}`}>
                   <item.icon size={15} className={active ? 'text-accent-primary' : 'text-text-muted group-hover:text-white'} />
-                  {item.label}
-                  {active && <ChevronRight size={12} className="ml-auto text-accent-primary" />}
+                  {!collapsed && item.label}
+                  {!collapsed && active && <ChevronRight size={12} className="ml-auto text-accent-primary" />}
                 </button>
               );
             })}
@@ -91,16 +101,20 @@ export function Sidebar() {
       </nav>
 
       {/* Status footer */}
-      <div className="px-3 py-3 border-t border-border space-y-1.5">
+      <div className={`px-3 py-3 border-t border-border space-y-1.5 ${collapsed ? 'flex flex-col items-center' : ''}`}>
         <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${bacnetOk ? 'bg-success' : 'bg-error'}`} />
-          <span className="text-[10px] text-text-muted">BACnet: <span className={bacnetOk ? 'text-success' : 'text-error'}>{bacnetOk ? 'Connected' : 'Disconnected'}</span></span>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${bacnetOk ? 'bg-success' : 'bg-error'}`} />
+          {!collapsed && (
+            <span className="text-[10px] text-text-muted">BACnet: <span className={bacnetOk ? 'text-success' : 'text-error'}>{bacnetOk ? 'OK' : 'Off'}</span></span>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${mqttOk ? 'bg-success' : 'bg-error'}`} />
-          <span className="text-[10px] text-text-muted">MQTT: <span className={mqttOk ? 'text-success' : 'text-error'}>{mqttOk ? 'Connected' : 'Disconnected'}</span></span>
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${mqttOk ? 'bg-success' : 'bg-error'}`} />
+          {!collapsed && (
+            <span className="text-[10px] text-text-muted">MQTT: <span className={mqttOk ? 'text-success' : 'text-error'}>{mqttOk ? 'OK' : 'Off'}</span></span>
+          )}
         </div>
-        {status?.active_mappings > 0 && (
+        {!collapsed && status?.active_mappings > 0 && (
           <div className="text-[10px] text-text-muted">Polling <span className="text-accent-primary font-bold">{status.active_mappings}</span> points</div>
         )}
       </div>
