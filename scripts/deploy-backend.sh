@@ -5,7 +5,7 @@
 # Usage: ./deploy-backend.sh
 
 set -e
-REMOTE="user@100.116.210.25"
+REMOTE="user@10.212.154.2"
 REMOTE_BACKEND="/home/user/bacnet_mqtt_gateway/backend"
 
 echo "▶ Syncing backend Python files..."

@@ -863,7 +863,9 @@ async def list_objects(device_id: int, refresh: bool = False):
     if device_registry and not refresh:
         cached_objs = device_registry.get_objects(device_id)
         if cached_objs:
-            return {"objects": cached_objs, "from_cache": True, "cache_size": len(cached_objs)}
+            from backend.bacnet_service import POLLABLE_TYPES
+            valid_objs = [o for o in cached_objs if str(o.get("object_type", "")).lower() in {t.lower() for t in POLLABLE_TYPES}]
+            return {"objects": valid_objs, "from_cache": True, "cache_size": len(valid_objs)}
 
     # Need live read from BACnet
     if not bacnet_service:
@@ -871,7 +873,9 @@ async def list_objects(device_id: int, refresh: bool = False):
         if device_registry:
             cached_objs = device_registry.get_objects(device_id)
             if cached_objs:
-                return {"objects": cached_objs, "from_cache": True}
+                from backend.bacnet_service import POLLABLE_TYPES
+                valid_objs = [o for o in cached_objs if str(o.get("object_type", "")).lower() in {t.lower() for t in POLLABLE_TYPES}]
+                return {"objects": valid_objs, "from_cache": True}
         return JSONResponse({"error": "BACnet service not available"}, status_code=500)
 
     address = bacnet_service.get_device_address(device_id)

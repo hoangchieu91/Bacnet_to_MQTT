@@ -48,9 +48,9 @@ Hệ thống BACnet-MQTT Gateway là **cầu nối thời gian thực** giữa m
 |---|---|
 | **Gateway Server** | Ubuntu 24.04, i7-6700, RAM 1.9GB, Disk 29GB |
 | **BACnet Interface** | `ens38` — 192.168.20.113 (BACnet/IP subnet) |
-| **Remote Access** | Tailscale (100.116.210.25) + OpenVPN (tun0) |
+| **Remote Access** | Tailscale (100.74.25.27) + OpenVPN (tun0) |
 | **MQTT Broker** | Mosquitto local (Docker) |
-| **Web UI** | http://100.116.210.25:8080 |
+| **Web UI** | http://100.74.25.27:8080 |
 | **Database** | SQLite WAL — lịch sử 30 ngày |
 
 ### 3.2 Thách Thức Lớn: 700+ Devices
@@ -213,52 +213,56 @@ Target operating RAM:
   "name": "FCU phải bật cooling khi nhiệt độ > 26°C",
   "trigger": {
     "point_id": "temp_room_205",
-    "condition": "value > 26.0"
-  },
-  "expected": {
-    "point_id": "fcu_205_mode",
-    "expected_value": "cooling",
-    "tolerance_seconds": 120
-  },
-  "severity": "warning",
-  "notify_mqtt": "alerts/fcu/scenario_fail"
-}
+| **Remote Access** | Tailscale (10.212.154.2) + OpenVPN (tun0) |
+| **BMS Connection** | eth1 (192.168.20.250) + MSTP (ttyUSB0) |
+| **Web UI** | http://10.212.154.2:8080 |
+
+### 2.2. Technology Stack
+
+* **Backend**: Python 3.12, FastAPI, Uvicorn, BAC0 (bacpypes3), asyncio
+* **Frontend**: React (Vite+Rollup), Tailwind CSS
+* **System Integration**: systemctl, NGINX
+
+## 3. High-Level Architecture
+
+The Gateway functions as a transparent translator between legacy BACnet RS485/IP networks and modern IT/Cloud infrastructure. 
+
+```
+[ BMS Server + Edge Devices ]
+           | (BACnet/IP & MSTP)
+           v
++------------------------+
+| BACnet-MQTT Gateway    |  -> Gateway Engine handles concurrent polling
+| (Edge Computing Node)  |  -> Protocol conversion & state caching
++------------------------+
+           | (MQTT over SSL or WS)
+           v
+[ Control Center Cloud / MQTT Broker ]
 ```
 
-### 7.2 Rule Engine Logic
+## 4. Key Deployment Artifacts
 
-```
-Event: temp_room_205 = 27.5°C (> 26°C trigger)
-  → Start timer 120s
-  → At T+120s: read fcu_205_mode
-    IF fcu_205_mode == "cooling" → ✅ OK, clear alert
-    IF fcu_205_mode != "cooling" → 🔴 Anomaly detected!
-       → Log to event_log (severity=warning)
-       → Publish to MQTT: alerts/fcu/scenario_fail
-       → Show in Anomaly page
-```
+- **Backend**: `/home/user/bacnet_mqtt_gateway/backend`
+- **Frontend**: `/home/user/bacnet_mqtt_gateway/frontend_v2/dist`
+- **Service definitions**:
+  - `bacnet-gateway.service`
+  - `/etc/nginx/sites-available/bacnet-gateway`
 
----
-
-## 8. Quy Trình Deploy An Toàn (Live System)
+## 5. Typical Developer Commands
 
 ```bash
-# 1. Test local trước khi deploy
-source venv/bin/activate
-python -m pytest backend/tests/ -v
+# Backend Logs
+sudo journalctl -u bacnet-gateway -f
 
-# 2. Build frontend (chỉ copy files, không restart service)
-cd frontend_v2 && npm run build
+# Sync code to device
+rsync -az -e "ssh" --delete \
+  frontend_v2/dist/ user@10.212.154.2:/home/user/bacnet_mqtt_gateway/frontend_v2/dist/
 
-# 3. Deploy — chỉ copy files thay đổi
-rsync -avz --exclude=node_modules \
-  frontend_v2/dist/ user@100.116.210.25:/home/user/bacnet_mqtt_gateway/frontend_v2/dist/
+# Restart Gateway
+ssh user@10.212.154.2 "sudo systemctl restart bacnet-gateway"
 
-# 4. Restart service (< 5 giây downtime)
-ssh user@100.116.210.25 "sudo systemctl restart bacnet-gateway"
-
-# 5. Verify
-curl -s http://100.116.210.25:8080/api/status | python -m json.tool
+# Validate API
+curl -s http://10.212.154.2:8080/api/status | python -m json.tool
 ```
 
 ---
