@@ -11,12 +11,13 @@ cd "$(dirname "$0")/../frontend_v2"
 npm run build 2>&1 | tail -3
 
 echo "▶ Syncing dist/ to server (no backend restart)..."
-sshpass -p "Admin@12345" rsync -az --delete dist/ \
-  -e "ssh -o StrictHostKeyChecking=no" \
+sshpass -p "Admin@12345" rsync -az --delete \
+  -e "ssh -o StrictHostKeyChecking=no -o KexAlgorithms=diffie-hellman-group14-sha256 -o Ciphers=aes128-ctr -o MACs=hmac-sha2-256" \
+  "$(dirname "$0")/../frontend_v2/dist/" \
   "${REMOTE}:${REMOTE_DIST}/"
 
-echo "▶ Fixing NGINX read permissions..."
-sshpass -p "Admin@12345" ssh -o StrictHostKeyChecking=no "${REMOTE}" \
+echo "▶ Fixing permissions for NGINX..."
+sshpass -p "Admin@12345" ssh -o "StrictHostKeyChecking=no" -o "KexAlgorithms=diffie-hellman-group14-sha256" -o "Ciphers=aes128-ctr" -o "MACs=hmac-sha2-256" "${REMOTE}" \
   "echo 'Admin@12345' | sudo -S bash -c 'find ${REMOTE_DIST} -type d -exec chmod o+rx {} \\; && find ${REMOTE_DIST} -type f -exec chmod o+r {} \\;'"
 
 echo "✅ Frontend deployed — NGINX serves new files immediately, BACnet untouched"

@@ -10,12 +10,12 @@ REMOTE_BACKEND="/home/user/bacnet_mqtt_gateway/backend"
 
 echo "▶ Syncing backend Python files..."
 sshpass -p "Admin@12345" rsync -az \
-  -e "ssh -o StrictHostKeyChecking=no" \
+  -e "ssh -o StrictHostKeyChecking=no -o KexAlgorithms=diffie-hellman-group14-sha256 -o Ciphers=aes128-ctr -o MACs=hmac-sha2-256" \
   "$(dirname "$0")/../backend/" \
   "${REMOTE}:${REMOTE_BACKEND}/"
 
 echo "▶ Restarting bacnet-gateway service..."
-sshpass -p "Admin@12345" ssh -o StrictHostKeyChecking=no "${REMOTE}" \
+sshpass -p "Admin@12345" ssh -o "StrictHostKeyChecking=no" -o "KexAlgorithms=diffie-hellman-group14-sha256" -o "Ciphers=aes128-ctr" -o "MACs=hmac-sha2-256" "${REMOTE}" \
   "echo 'Admin@12345' | sudo -S systemctl restart bacnet-gateway && sleep 5 && systemctl is-active bacnet-gateway"
 
 echo "✅ Backend deployed and restarted"
