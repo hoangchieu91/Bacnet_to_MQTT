@@ -67,13 +67,21 @@ async def startup() -> None:
         import yaml
         cfg = yaml.safe_load(f)
 
-    _monitor = HealthMonitor.from_config(cfg_path, broadcast_cb=_broadcast)
-    await _monitor.start()
+    # Try to start HealthMonitor (needs BAC0 MS/TP) — not critical
+    try:
+        _monitor = HealthMonitor.from_config(cfg_path, broadcast_cb=_broadcast)
+        await _monitor.start()
+        _bridge = MstpBridge.from_config(cfg_path, bacnet=_monitor._scanner._bacnet)
+        await _bridge.start()
+        asyncio.create_task(_monitor.run())
+        asyncio.create_task(_bridge.run_poll_loop())
+        logger.info("[Dashboard] Scanner + Bridge started")
+    except Exception as exc:
+        logger.warning("[Dashboard] Scanner/Bridge unavailable: %s — running sniffer-only mode", exc)
+        _monitor = None
+        _bridge = None
 
-    _bridge = MstpBridge.from_config(cfg_path, bacnet=_monitor._scanner._bacnet)
-    await _bridge.start()
-
-    # Sniffer runs on SAME serial port in passive mode — no need to join token ring
+    # Sniffer runs on SAME serial port in passive mode — no BAC0 needed
     sniffer_cfg = cfg.get("sniffer", {})
     if sniffer_cfg.get("enabled", True):
         def _on_pathology(p: Pathology) -> None:
@@ -84,13 +92,15 @@ async def startup() -> None:
                 "description": p.description,
                 "nodes_involved": p.nodes_involved,
             }))
-        _sniffer = MstpSniffer.from_config(cfg_path, on_pathology=_on_pathology)
-        await _sniffer.start()
+        try:
+            _sniffer = MstpSniffer.from_config(cfg_path, on_pathology=_on_pathology)
+            await _sniffer.start()
+            logger.info("[Dashboard] Sniffer started on serial port (PASSIVE)")
+        except Exception as exc:
+            logger.error("[Dashboard] Sniffer failed to start: %s", exc)
+            _sniffer = None
 
-    # Launch background tasks
-    asyncio.create_task(_monitor.run())
-    asyncio.create_task(_bridge.run_poll_loop())
-    logger.info("[Dashboard] Background tasks started")
+    logger.info("[Dashboard] Startup complete")
 
 
 @app.on_event("shutdown")

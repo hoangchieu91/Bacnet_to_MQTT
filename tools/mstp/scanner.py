@@ -100,10 +100,12 @@ class MstpScanner:
                     self.port, self.baudrate, self.node_address)
         try:
             # BAC0 accepts 'port' for MS/TP and 'mstpAddress' for node id
+            # Use UDP 47809 to avoid conflict with main gateway on 47808
             self._bacnet = BAC0.lite(
                 port=self.port,
                 baudrate=self.baudrate,
                 mstpAddress=self.node_address,
+                ip="0.0.0.0/24:47809",
             )
             # Allow 3s for token ring join before first scan
             await asyncio.sleep(3)
