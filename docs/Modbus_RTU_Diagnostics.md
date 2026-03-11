@@ -12,7 +12,8 @@
 4. [Kỹ thuật Sniffer: Bắt frame từ dòng byte thô](#4-kỹ-thuật-sniffer)
 5. [Kỹ thuật Diagnostics: 8 quy tắc chẩn đoán](#5-kỹ-thuật-diagnostics)
 6. [Inline Proxy: Kỹ thuật MITM cho Modbus RTU](#6-inline-proxy)
-7. [So sánh Passive vs Inline](#7-so-sánh)
+7. [Dual-Pi: Cross-correlation giữa 2 điểm quan sát](#7-dual-pi)
+8. [So sánh tổng hợp 3 mode](#8-so-sánh-tổng-hợp)
 
 ---
 
@@ -652,55 +653,432 @@ Violation:
 
 ---
 
-## 7. So sánh Passive vs Inline
+## 7. Dual-Pi: Cross-correlation giữa 2 điểm quan sát
+
+### Bản chất: biến bus thành "oscilloscope 2 kênh"
+
+Khi chỉ có 1 điểm quan sát (1 Pi), bạn thấy bus **tại 1 vị trí**. Thêm Pi thứ 2 tại vị trí khác
+→ bạn có thể **so sánh** tín hiệu RS-485 ở **2 điểm khác nhau trên bus** → phát hiện lỗi phụ thuộc vào vị trí.
+
+### Topology
 
 ```
-                    ┌──────────────────┬──────────────────────┐
-                    │  Passive (1 COM) │  Inline Proxy (2 COM)│
-┌───────────────────┼──────────────────┼──────────────────────┤
-│ Ảnh hưởng bus     │ Không            │ Có (nếu Pi crash →  │
-│                   │                  │ bus mất kết nối)     │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Phần cứng         │ 1× USB-RS485     │ 2× USB-RS485         │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Biết chiều frame  │ ❌ (đoán)        │ ✅ (chắc chắn)       │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Response time     │ ⚠️ Heuristic     │ ✅ Chính xác (µs)    │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ No response       │ ⚠️ False positive│ ✅ 100% confirmed    │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Diagnose per-     │ ❌               │ ✅ (CRC fail 1 chiều)│
-│ segment wiring    │                  │                      │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Safe for prod     │ ✅ (không ảnh    │ ⚠️ (Pi là SPOF)      │
-│                   │  hưởng bus)      │                      │
-├───────────────────┼──────────────────┼──────────────────────┤
-│ Usecase           │ Monitor liên tục │ Debug deep problem   │
-│                   │ 24/7             │ phải tạm dừng bus    │
-└───────────────────┴──────────────────┴──────────────────────┘
+  ┌────────────────────── RS-485 Bus ──────────────────────────────────┐
+  │                                                                    │
+  │   ┌────────┐    ┌─[Pi-1 Inline]──┐    ┌────┐ ┌────┐    ┌─[Pi-2]─┐│
+  │   │ MASTER ├─A──┤ComA        ComB├─A──┤ S1 ├─┤ S2 ├─A──┤Passive ││
+  │   │ PLC    ├─B──┤                ├─B──┤    ├─┤    ├─B──┤Sniffer ││
+  │   └────────┘    └────────────────┘    └────┘ └────┘    └────────┘│
+  │   [120Ω]        segment 1 │ segment 2                   [120Ω]  │
+  │                           │                                      │
+  └───────────────────────────┴──────────────────────────────────────┘
+                              │
+                      Pi-1 cắt bus ở đây
+                      Forward A⇄B
+
+  Pi-1: INLINE MODE — ở ĐẦU line (giữa Master và Slaves)
+        • Biết direction (ComA=Master, ComB=Slave)
+        • Forward traffic
+        • 15 diagnostics (8 base + 7 inline)
+
+  Pi-2: PASSIVE MODE — ở CUỐI line
+        • Tap RX-only
+        • Không biết direction
+        • 8 diagnostics (base)
+        • NHƯNG: vị trí cuối = chất lượng tín hiệu ở worst-case point
 ```
 
-### Khi nào dùng mode nào?
+### Tại sao cuối line quan trọng?
 
-**Passive Sniffer** — dùng khi:
-- Monitor bus 24/7 không muốn ảnh hưởng
-- Kiểm tra sức khỏe tổng quan (CRC, utilization, exception rate)
-- Tìm slave nào gây nhiều lỗi nhất
+RS-485 là **bus tuyến tính**. Tín hiệu yếu dần theo khoảng cách:
 
-**Inline Proxy** — dùng khi:
-- Cần đo response time chính xác
-- Nghi ngờ slave không trả lời nhưng passive không confirm được
-- Debug firmware issue (direction violation, broadcast response)
-- Tìm 2 slave cùng address
-- Tìm đoạn dây nào bị lỗi (so sánh CRC 2 chiều)
+```
+  Biên độ tín hiệu (V_A - V_B):
+
+  3.0V ┤████████░░░░░░░░░░░░░░░░░░░░░░▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▓▓▓▓▓▓▓▓▓▓▓
+       │                                                           │
+  2.0V ┤   Pi-1 thấy frame rõ                                     │
+       │   (gần Master)                                            │
+  1.0V ┤                                               Pi-2 thấy  │
+       │                                               frame yếu  │
+  0.2V ┤ ··········································· threshold ···│···
+       │                                               có thể lỗi │
+       └───────────────────────────────────────────────────────────┘
+       Master                                              Slave cuối
+       (đầu bus)                                           (cuối bus)
+```
+
+→ Nếu tín hiệu "vừa đủ" ở cuối line → **CRC errors chỉ xuất hiện ở Pi-2, không ở Pi-1**.
+
+### 8 chẩn đoán mới chỉ có khi dùng 2 Pi
+
+| # | Code | Bản chất | Mode 1? | Mode 2? | Mode 3? |
+|---|------|----------|:--:|:--:|:--:|
+| 16 | `SIGNAL_DEGRADATION` | CRC % ở Pi-2 > Pi-1 → suy hao tín hiệu | ❌ | ❌ | ✅ |
+| 17 | `SEGMENT_FAULT` | Frame mất hoàn toàn trên 1 đoạn | ❌ | ❌ | ✅ |
+| 18 | `PROPAGATION_DELAY` | Đo delay truyền tải qua cáp | ❌ | ❌ | ✅ |
+| 19 | `TERMINATION_FAULT` | Phương hướng CRC errors → thiếu termination | ❌ | ❌ | ✅ |
+| 20 | `NOISE_LOCALIZATION` | Xác định vùng nhiễu trên bus | ❌ | ❌ | ✅ |
+| 21 | `FRAME_LOSS` | Frame gửi từ Pi-1 nhưng Pi-2 không thấy | ❌ | ❌ | ✅ |
+| 22 | `SLAVE_INTERFERENCE` | Slave gây nhiễu các slave khác cùng segment | ❌ | ❌ | ✅ |
+| 23 | `TIMING_DRIFT` | Sai lệch timing giữa 2 điểm quan sát | ❌ | ❌ | ✅ |
 
 ---
 
-## Phụ lục A: Sơ đồ đấu nối phần cứng Inline Proxy
+### Rule 16: SIGNAL_DEGRADATION — Suy hao tín hiệu theo khoảng cách
+
+```
+Bản chất:
+  So sánh tỷ lệ CRC errors tại 2 điểm:
+    CRC_error_rate_Pi1 = bad_frames_Pi1 / total_frames_Pi1
+    CRC_error_rate_Pi2 = bad_frames_Pi2 / total_frames_Pi2
+
+  Nếu:  CRC_Pi2 >> CRC_Pi1  → tín hiệu suy yếu theo khoảng cách
+
+Trigger:
+  CRC_Pi2 > CRC_Pi1 + 5% → warning (SIGNAL_DEGRADATION)
+  CRC_Pi2 > CRC_Pi1 + 15% → critical
+
+Nguyên nhân:
+  • Bus quá dài (>1200m @9600, >700m @19200)
+  • Cáp kém chất lượng (không twisted pair, không shielded)
+  • Quá nhiều tap/node trên bus (>32 unit loads)
+  • Mối nối cáp bị lỏng ở giữa bus
+
+Ví dụ:
+  Pi-1 (đầu bus): 200 frames, 1 bad CRC (0.5%)
+  Pi-2 (cuối bus): 200 frames, 24 bad CRC (12%)
+  → SIGNAL_DEGRADATION: 12% - 0.5% = 11.5% gap → critical
+  → Kết luận: cáp hoặc khoảng cách gây suy hao
+
+  Passive sniffer KHÔNG THỂ phát hiện vì chỉ thấy CRC tại 1 điểm.
+```
+
+### Rule 17: SEGMENT_FAULT — Frame mất trên 1 đoạn
+
+```
+Bản chất:
+  Pi-1 forward frame từ ComB ra bus segment 2.
+  Pi-2 ở cuối segment 2 PHẢI thấy frame đó.
+  Nếu Pi-2 KHÔNG thấy → đứt dây hoặc hở mạch giữa Pi-1 và Pi-2.
+
+Detection (cross-correlation):
+  1. Pi-1 ghi log mỗi frame forward sang ComB: {seq, ts, slave_id, fc, crc}
+  2. Pi-2 ghi log mỗi frame nhận: {seq, ts, slave_id, fc, crc}
+  3. So sánh 2 log (cần sync thời gian bằng NTP hoặc PTP):
+     - Frame có trong Pi-1 log nhưng KHÔNG trong Pi-2 → SEGMENT_FAULT
+     - Frame có trong cả 2 nhưng CRC khác → FRAME_CORRUPTION trên đường
+
+Ví dụ:
+  Pi-1 log:  ts=1.000 S=3 FC=03 CRC=✓
+  Pi-2 log:  (không có frame tương ứng trong window ±50ms)
+  → SEGMENT_FAULT: frame mất giữa Pi-1 và Pi-2
+  → Kiểm tra cáp đoạn Pi-1:ComB → Pi-2
+
+  Nếu lỗi chỉ xảy ra khi slave 3 respond (nhưng request từ master OK):
+  → Slave 3 có driver yếu, không đủ công suất truyền xa
+```
+
+### Rule 18: PROPAGATION_DELAY — Đo delay truyền tải qua cáp
+
+```
+Bản chất:
+  Cùng 1 frame, Pi-1 thấy trước, Pi-2 thấy sau.
+  Hiệu: Δt = ts_Pi2 - ts_Pi1
+
+  Δt bao gồm:
+    1. Propagation delay qua cáp (~5ns/m)
+    2. Pi-1 forward delay (~0.1ms byte-level)
+    3. Jitter do OS scheduling (~0-2ms)
+
+  Với bus 500m: propagation = 500 × 5ns = 2.5µs (nhỏ, bị jitter che lấp)
+  → Metric hữu ích hơn: đo JITTER (biến động Δt)
+
+Detection:
+  Nếu Δt ổn định ~1ms cho mọi frame → bus OK
+  Nếu Δt dao động mạnh (1ms ~ 50ms) → bus có vấn đề
+  Nếu Δt tăng dần theo thời gian → firmware bug (accumulating delay)
+
+Yêu cầu:
+  • Cả 2 Pi phải sync time (NTP hoặc PTP)
+  • Độ chính xác NTP: ±5-10ms → đủ phát hiện anomaly lớn
+  • Nếu dùng PTP: ±1µs → phát hiện cả propagation delay qua cáp
+```
+
+### Rule 19: TERMINATION_FAULT — Thiếu điện trở đầu cuối
+
+```
+Bản chất:
+  RS-485 cần termination 120Ω ở 2 đầu bus.
+  Thiếu terminaton → phản xạ sóng → CRC errors.
+
+  "Dấu hiệu đặc trưng" của thiếu termination:
+    • CRC errors CÓ PATTERN: lỗi theo hướng truyền
+    • Lỗi khi slave XA gửi về (tín hiệu yếu + phản xạ)
+    • Lỗi KHÔNG ĐỀU giữa 2 Pi
+
+Detection (Dual-Pi):
+  Trường hợp 1: Thiếu termination ĐẦU bus (gần Master)
+    Pi-1: thấy nhiều CRC errors từ slave responses (phản xạ từ đầu bus)
+    Pi-2: thấy ít CRC errors hơn (xa vị trí phản xạ)
+    → TERMINATION_FAULT: master end
+
+  Trường hợp 2: Thiếu termination CUỐI bus (gần Pi-2)
+    Pi-1: ít CRC errors
+    Pi-2: nhiều CRC errors (gần vị trí phản xạ)
+    → TERMINATION_FAULT: slave end
+
+  Trường hợp 3: Thiếu CẢ 2 đầu
+    Pi-1: nhiều CRC errors
+    Pi-2: nhiều CRC errors
+    → TERMINATION_FAULT: both ends
+
+So sánh với 1 Pi:
+  1 Pi chỉ thấy "nhiều CRC" → KHÔNG BIẾT thiếu ở đầu nào.
+  2 Pi → biết HƯỚNG phản xạ → biết đầu nào thiếu.
+```
+
+### Rule 20: NOISE_LOCALIZATION — Xác định vùng nhiễu
+
+```
+Bản chất:
+  Nhiễu EMI từ VFD, motor, relay thường tác động lên 1 đoạn cáp cụ thể.
+  Với 2 Pi, xác định nguồn nhiễu nằm ĐẦU hay CUỐI bus.
+
+Detection:
+  1. Đếm junk bytes (bytes random do noise):
+     junk_Pi1 = junk bytes/s tại Pi-1
+     junk_Pi2 = junk bytes/s tại Pi-2
+
+  2. Nếu junk_Pi1 >> junk_Pi2:
+     → Nhiễu ở đoạn Master → Pi-1 (segment 1)
+
+  3. Nếu junk_Pi2 >> junk_Pi1:
+     → Nhiễu ở đoạn Pi-1 → Pi-2 (segment 2)
+
+  4. Nếu junk_Pi1 ≈ junk_Pi2:
+     → Nhiễu ở giữa bus HOẶC nhiễu phủ toàn bộ
+
+Correlation với thời gian:
+  Nếu junk bursts xảy ra CÓ PATTERN (mỗi 100ms, mỗi 1s...)
+  → Nhiễu từ thiết bị đóng/cắt theo chu kỳ (relay, PWM, VFD)
+
+  Ghi timestamp mỗi junk burst ở cả 2 Pi:
+    Pi-1: junk burst @ t=5.000, t=5.100, t=5.200 (every 100ms)
+    Pi-2: junk burst @ t=5.001, t=5.101, t=5.201 (same pattern, 1ms later)
+    → Nhiễu nguồn gần segment 1, lan sang segment 2
+```
+
+### Rule 21: FRAME_LOSS — Frame mất trên đường truyền
+
+```
+Bản chất:
+  Khác SEGMENT_FAULT (frame mất hoàn toàn), FRAME_LOSS đếm tỷ lệ mất.
+
+Detection:
+  frame_loss_rate = (frames_Pi1 - frames_Pi2) / frames_Pi1 × 100
+
+  Trigger:
+    > 1% → warning
+    > 5% → critical
+
+  frame_loss_rate NÊN = 0% (mọi frame Pi-1 forward phải đến Pi-2).
+  Nếu > 0%:
+    • Dây hở mạch gián đoạn (loose connection → mất frame random)
+    • Slave driver bị yếu → frame fade out trước khi đến cuối bus
+    • Adapter bị overload (buffer overflow → drop bytes)
+
+Phân tích sâu:
+  Nếu FRAME_LOSS chỉ xảy ra với frame TỪ 1 slave cụ thể:
+    Pi-1: forwarded 100 frames from slave 5
+    Pi-2: received 87 frames from slave 5 → loss 13%
+
+    Các slave khác: loss 0%
+
+    → Slave 5 có driver output yếu (không đủ công suất truyền xa)
+    → Hoặc: slave 5 ở nhánh rẽ (stub) quá dài
+```
+
+### Rule 22: SLAVE_INTERFERENCE — Slave gây nhiễu slave khác
+
+```
+Bản chất:
+  Một slave bị hỏng có thể "kéo bus xuống" khi nó truyền,
+  gây nhiễu cho tất cả thiết bị khác trên cùng segment.
+
+Detection (correlation analysis):
+  1. Pi-1 (inline) biết CHÍNH XÁC slave nào đang nói (từ ComB)
+  2. Pi-2 (passive) thấy CRC errors
+
+  Cross-correlate:
+    Thời điểm CRC errors ở Pi-2 → map với slave nào đang TX ở Pi-1
+
+    slavery_interference_score[slave_id] =
+      CRC_errors_during_slave_TX / total_slave_TX_time
+
+  Nếu 1 slave có score cao hơn hẳn:
+    slave 3: interference score = 42% (CRC errors khi slave 3 đang TX)
+    slave 1: interference score = 1%
+    slave 2: interference score = 0%
+    → Slave 3 gây nhiễu! (driver quá mạnh, rise/fall time quá nhanh,
+       hoặc driver bị hỏng → output impedance sai)
+
+  1 Pi KHÔNG THỂ làm vì:
+    - Passive: không biết ai đang TX
+    - Inline: biết ai TX nhưng chỉ thấy CRC ở 1 vị trí
+    - DUAL: biết ai TX (Pi-1) + CRC ở vị trí khác (Pi-2)
+```
+
+### Rule 23: TIMING_DRIFT — Sai lệch timing giữa 2 điểm
+
+```
+Bản chất:
+  Frame duration (từ byte đầu đến byte cuối) phải GIỐNG NHAU
+  tại mọi điểm trên bus (vì baud rate cố định).
+
+  Nếu frame duration khác nhau ở 2 Pi:
+    duration_Pi1 = ts_last_byte - ts_first_byte (tại Pi-1)
+    duration_Pi2 = ts_last_byte - ts_first_byte (tại Pi-2)
+
+    drift = |duration_Pi1 - duration_Pi2|
+
+  drift > 0 nghĩa là:
+    • Baud rate mismatch giữa thiết bị trên 2 segment
+    • Clock drift trên 1 thiết bị (crystal oscillator sai)
+    • Adapter USB-RS485 có buffering khác nhau
+
+Detection:
+  Theo dõi drift cho mỗi slave:
+    slave 1: avg drift = 0.02ms → OK
+    slave 2: avg drift = 0.03ms → OK
+    slave 7: avg drift = 1.5ms  → BAUD RATE MISMATCH!
+    → Slave 7 có thể đang chạy 9550 baud thay vì 9600
+       (crystal oscillator tolerance ±0.5%)
+```
+
+---
+
+### Kiến trúc phần mềm Dual-Pi
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                           Network                              │
+│         (WiFi / Ethernet / Tailscale VPN)                      │
+│                                                                │
+│    ┌──────────────────────┐       ┌──────────────────────┐     │
+│    │      Pi-1 (Inline)   │       │    Pi-2 (Passive)    │     │
+│    │                      │       │                      │     │
+│    │  modbus_proxy.py     │       │  modbus_sniffer.py   │     │
+│    │  ├── DirectionalFrame│       │  ├── FrameParser     │     │
+│    │  ├── ProxyAnalyzer   │       │  ├── HealthAnalyzer  │     │
+│    │  └── 15 diagnostics  │       │  └── 8 diagnostics   │     │
+│    │                      │       │                      │     │
+│    │  dashboard.py :8766  │       │  dashboard.py :8766  │     │
+│    │  └── /api/sniffer/   │       │  └── /api/sniffer/   │     │
+│    │      report          │       │      report          │     │
+│    └──────────┬───────────┘       └──────────┬───────────┘     │
+│               │                              │                 │
+│               └──── Cross-correlator ────────┘                 │
+│                     (compare reports)                          │
+│                                                                │
+│    Trung tâm so sánh có thể chạy trên:                         │
+│      • Pi-1 (pull report từ Pi-2 qua API)                      │
+│      • Server riêng                                            │
+│      • Manual: download 2 JSON reports và diff                  │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Cách sync dữ liệu giữa 2 Pi
+
+**Phương pháp 1: API polling (đơn giản)**
+
+```python
+# Chạy trên Pi-1 (hoặc server thứ 3)
+import requests
+
+report_pi1 = get_local_report()  # từ proxy analyzer
+report_pi2 = requests.get("http://<pi2-ip>:8766/api/sniffer/report").json()
+
+# Cross-correlate
+crc_diff = report_pi2["bad_frame_pct"] - report_pi1["bad_frame_pct"]
+if crc_diff > 5:
+    alert("SIGNAL_DEGRADATION", f"CRC gap: {crc_diff}%")
+
+frame_loss = report_pi1["total_frames"] - report_pi2["total_frames"]
+if frame_loss > 0:
+    alert("FRAME_LOSS", f"{frame_loss} frames lost")
+```
+
+**Phương pháp 2: MQTT (realtime)**
+
+```
+Pi-1 publish → MQTT broker ← Pi-2 publish
+                    │
+              Correlator subscribe
+              (so sánh events realtime)
+```
+
+**Phương pháp 3: Centralized log + offline analysis**
+
+```
+Pi-1: ghi frame log ra file → SCP/rsync lên server
+Pi-2: ghi frame log ra file → SCP/rsync lên server
+Server: diff 2 file → báo cáo cross-correlation
+```
+
+---
+
+## 8. So sánh tổng hợp 3 mode
+
+| Capability | Mode 1: Passive | Mode 2: Inline | Mode 3: Dual-Pi |
+|---|:--:|:--:|:--:|
+| **Phần cứng** | 1 Pi, 1 USB-485 | 1 Pi, 2 USB-485 | 2 Pi, 3 USB-485 |
+| **Ảnh hưởng bus** | Không | Có (Pi là SPOF) | Có (Pi-1 là SPOF) |
+| CRC error detection | ✅ | ✅ | ✅ |
+| Junk byte detection | ✅ | ✅ | ✅ |
+| Bus silence | ✅ | ✅ | ✅ |
+| Bus utilization | ✅ | ✅ | ✅ |
+| Chatty master | ✅ | ✅ | ✅ |
+| Exception analysis | ✅ | ✅ | ✅ |
+| **Response time** | ⚠️ Heuristic | ✅ Exact | ✅ Exact |
+| **No response** | ⚠️ Heuristic | ✅ Confirmed | ✅ Confirmed |
+| Direction violation | ❌ | ✅ | ✅ |
+| Late response | ❌ | ✅ | ✅ |
+| Broadcast response | ❌ | ✅ | ✅ |
+| Duplicate slave ID | ❌ | ✅ | ✅ |
+| Frame corruption (per-dir) | ❌ | ✅ | ✅ |
+| **Signal degradation** | ❌ | ❌ | ✅ |
+| **Segment fault** | ❌ | ❌ | ✅ |
+| **Propagation delay** | ❌ | ❌ | ✅ |
+| **Termination fault (which end)** | ❌ | ❌ | ✅ |
+| **Noise localization** | ❌ | ❌ | ✅ |
+| **Frame loss rate** | ❌ | ❌ | ✅ |
+| **Slave interference** | ❌ | ❌ | ✅ |
+| **Timing drift** | ❌ | ❌ | ✅ |
+| **Tổng diagnostics** | **8** | **15** | **23** |
+
+### Khi nào dùng mode nào?
+
+| Tình huống | Mode khuyến nghị | Lý do |
+|-----------|:-:|------|
+| Monitor 24/7, không can thiệp | **1** | An toàn, không ảnh hưởng bus |
+| Debug slave không trả lời | **2** | Cần exact response time + no-response confirm |
+| Bus CRC lỗi random, không rõ nguyên nhân | **3** | So sánh 2 điểm để biết suy hao hay nhiễu |
+| Nghi ngờ cáp hỏng giữa 2 điểm | **3** | Frame loss + segment fault detection |
+| Tìm slave gây nhiễu bus | **3** | Cross-correlate TX timing + CRC errors |
+| Kiểm tra termination | **3** | So sánh pattern CRC ở 2 đầu bus |
+| Debug firmware slave | **2** | Direction violation + broadcast response |
+| Commissioning mới, kiểm tra tổng thể | **2→3** | Inline trước, thêm passive nếu cần |
+
+---
+
+## Phụ lục A: Sơ đồ đấu nối phần cứng
+
+### Mode 2: Inline Proxy (1 Pi, 2 COM)
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                    Raspberry Pi 5                                 │
+│                    Raspberry Pi 5 [Pi-1]                          │
 │                                                                  │
 │   USB Port 1          USB Port 2                                 │
 │   ┌─────────┐        ┌─────────┐                                │
@@ -709,51 +1087,54 @@ Violation:
 │   │ ComA    │        │ ComB    │                                 │
 │   │/ttyUSB0 │        │/ttyUSB1 │                                 │
 │   └────┬────┘        └────┬────┘                                 │
-│        │                  │                                      │
 └────────┼──────────────────┼──────────────────────────────────────┘
          │                  │
-    ┌────┴────┐        ┌────┴────┐
-    │ A(+)    │        │ A(+)    │
-    │ B(-)    │        │ B(-)    │
-    │ GND     │        │ GND     │
-    └────┬────┘        └────┬────┘
-         │                  │
-    ═════╪══════════   ═════╪══════════════════
-    Segment 1 (Master)  Segment 2 (Slaves)
-    ═════╪══════════   ═════╪════╪════╪═══════
-         │                  │    │    │
-    ┌────┴────┐        ┌────┴┐ ┌─┴─┐ ┌┴────┐
-    │ MASTER  │        │ S1  │ │S2 │ │ S3  │
-    │ PLC/    │        │     │ │   │ │     │
-    │ SCADA   │        │     │ │   │ │     │
-    └─────────┘        └─────┘ └───┘ └─────┘
+    [120Ω]                  │
+    ┌────┴────┐        ┌────┴────────────────────────────┐
+    │ MASTER  │        │  Segment 2                      │
+    │ PLC/    │        │                                 │
+    │ SCADA   │        │  S1 ─── S2 ─── S3 ─── [120Ω]  │
+    └─────────┘        └─────────────────────────────────┘
+```
 
-    ⚠️ Mỗi segment cần termination 120Ω ở 2 đầu
-    ⚠️ GND phải chung giữa tất cả thiết bị
+### Mode 3: Dual-Pi (2 Pi, 3 COM)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│   ┌─────────┐   ┌──── Pi-1 (Inline) ────┐   ┌───┐ ┌───┐   ┌─ Pi-2 ──┐ │
+│   │ MASTER  │   │                       │   │S1 │ │S2 │   │Passive │ │
+│   │ PLC     ├─A─┤ ComA           ComB   ├─A─┤   ├─┤   ├─A─┤Sniffer │ │
+│   │         ├─B─┤(ttyUSB0)   (ttyUSB1)  ├─B─┤   ├─┤   ├─B─┤(ttyUSB0│ │
+│   └─────────┘   └───────────────────────┘   └───┘ └───┘   └────────┘ │
+│   [120Ω]                                                    [120Ω]    │
+│                                                                        │
+│   segment 1          segment 2                                         │
+│   (Master→Pi-1)      (Pi-1→Slaves→Pi-2)                               │
+│                                                                        │
+│   Pi-1:8766 ←──── WiFi/Ethernet ────→ Pi-2:8766                       │
+│              (sync reports via API / MQTT)                              │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Phụ lục B: Cấu trúc source code
 
 ```
 tools/modbus/
-├── modbus_sniffer.py    ← [521 lines] CRC-16, FrameParser, HealthAnalyzer, ModbusSniffer
-│                           • _crc16()          — CRC-16 Modbus lookup table
-│                           • ModbusFrameParser  — gap-based state machine
-│                           • ModbusHealthAnalyzer — 8 diagnostic rules
-│                           • ModbusSniffer      — async serial reader + diagnostics
+├── modbus_sniffer.py    ← CRC-16, FrameParser, HealthAnalyzer, ModbusSniffer
+│                           Mode 1 (Passive): 8 diagnostics
 │
-├── modbus_proxy.py      ← [450 lines] Inline Proxy, DirectionalFrame, ProxyAnalyzer
-│                           • ProxyHealthAnalyzer — extends base with 7 more rules
-│                           • ModbusProxy         — dual COM forward + analyze
-│                           • DirectionalFrame    — frame with direction context
+├── modbus_proxy.py      ← Inline Proxy, DirectionalFrame, ProxyAnalyzer
+│                           Mode 2 (Inline): 15 diagnostics (8 + 7)
 │
-├── dashboard.py         ← [160 lines] FastAPI server
-│                           • /api/sniffer/report → JSON health report
-│                           • /ws → WebSocket realtime events
+├── dashboard.py         ← FastAPI server (port 8766)
+│                           /api/sniffer/report → JSON health report
+│                           /ws → WebSocket realtime events
 │
-├── config.yaml
+├── config.yaml          ← Serial + sniffer + proxy config
 ├── requirements.txt
 ├── modbus-rtu-tools.service
 └── static/
-    └── index.html       ← [310 lines] Dark-themed dashboard
+    └── index.html       ← Dark-themed dashboard (3 tabs)
 ```
+
