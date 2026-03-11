@@ -3,10 +3,10 @@
 ## SSH Access
 - **Tailscale IP:** 10.212.154.2
 - **Network Interface Configuration:**
-  - `eth0` (WAN/Main network): `10.25.7.155` / `24`
-  - `eth1` (BMS network): `192.168.20.250` / `24`
-  - `tun0` (OpenVPN): `10.8.0.x`
-  - `tailscale0` (Tailscale VPN)
+  - `ens33` (WAN/Main network): `172.20.24.223` / `23`
+  - `ens38` (BMS network): `192.168.20.113` / `24`
+  - `tun0` (OpenVPN): `10.212.154.2`
+  - `tailscale0` (Tailscale VPN): `100.74.25.27`
 
 ---
 
@@ -32,11 +32,10 @@ File cấu hình: `/etc/netplan/01-network-manager-all.yaml`
 
 | Interface | IP Address | Mô Tả |
 | :--- | :--- | :--- |
-| eth0 | 10.25.7.155 | Mạng chính của văn phòng |
-| eth1 | 192.168.20.250 | Mạng chuyên biệt kết nối tủ BMS/BACnet (có route) |
-| tun0 | DHCP OpenVPN | Mạng của VPN server |
-| tailscale0 | 10.212.154.2 | Tailscale VPN |
+| ens33 | 172.20.24.223 | Mạng chính của văn phòng |
+| ens38 | 192.168.20.113 | Mạng chuyên biệt kết nối tủ BMS/BACnet (có route) |
 | tun0 | 10.212.154.2 | OpenVPN (→ VPN clients truy cập BACnet) |
+| tailscale0 | 100.74.25.27 | Tailscale VPN |
 
 ## OpenVPN Server
 - **Server:** 10.25.7.155 (nxchieu.duckdns.org:54194)
