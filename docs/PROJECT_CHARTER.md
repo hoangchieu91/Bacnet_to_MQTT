@@ -48,9 +48,9 @@ Hệ thống BACnet-MQTT Gateway là **cầu nối thời gian thực** giữa m
 |---|---|
 | **Gateway Server** | Ubuntu 24.04, i7-6700, RAM 1.9GB, Disk 29GB |
 | **BACnet Interface** | `ens38` — 192.168.20.113 (BACnet/IP subnet) |
-| **Remote Access** | Tailscale (100.116.210.25) + OpenVPN (tun0) |
+| **Remote Access** | Tailscale (100.74.25.27) + OpenVPN (tun0) |
 | **MQTT Broker** | Mosquitto local (Docker) |
-| **Web UI** | http://100.116.210.25:8080 |
+| **Web UI** | http://100.74.25.27:8080 |
 | **Database** | SQLite WAL — lịch sử 30 ngày |
 
 ### 3.2 Thách Thức Lớn: 700+ Devices
@@ -252,13 +252,13 @@ cd frontend_v2 && npm run build
 
 # 3. Deploy — chỉ copy files thay đổi
 rsync -avz --exclude=node_modules \
-  frontend_v2/dist/ user@100.116.210.25:/home/user/bacnet_mqtt_gateway/frontend_v2/dist/
+  frontend_v2/dist/ user@100.74.25.27:/home/user/bacnet_mqtt_gateway/frontend_v2/dist/
 
 # 4. Restart service (< 5 giây downtime)
-ssh user@100.116.210.25 "sudo systemctl restart bacnet-gateway"
+ssh user@100.74.25.27 "sudo systemctl restart bacnet-gateway"
 
 # 5. Verify
-curl -s http://100.116.210.25:8080/api/status | python -m json.tool
+curl -s http://100.74.25.27:8080/api/status | python -m json.tool
 ```
 
 ---

@@ -1,7 +1,7 @@
 # BACnet Gateway — Ubuntu Server
 
 ## SSH Access
-- **Tailscale IP:** 100.116.210.25
+- **Tailscale IP:** 100.74.25.27
 - **LAN IP:** 172.20.24.223
 - **VPN IP:** 10.212.154.2 (OpenVPN client `SDN_2026`)
 - **BACnet IP:** 192.168.20.113 (ens38 — mạng BACnet/IP)
@@ -9,7 +9,7 @@
 - **Pass:** Admin@12345
 
 ## Web UI
-- **URL:** http://100.116.210.25:8080
+- **URL:** http://100.74.25.27:8080
 - **VPN URL:** http://10.212.154.2:8080
 
 ## Services
@@ -30,7 +30,7 @@
 |-----------|-----|---------|
 | ens33 | 172.20.24.223 | Internet (LAN) |
 | ens38 | 192.168.20.113 | BACnet/IP LAN |
-| tailscale0 | 100.116.210.25 | Tailscale VPN |
+| tailscale0 | 100.74.25.27 | Tailscale VPN |
 | tun0 | 10.212.154.2 | OpenVPN (→ VPN clients truy cập BACnet) |
 
 ## OpenVPN Server

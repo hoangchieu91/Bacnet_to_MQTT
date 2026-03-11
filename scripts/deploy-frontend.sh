@@ -3,7 +3,7 @@
 # Usage: ./deploy-frontend.sh
 
 set -e
-REMOTE="user@100.116.210.25"
+REMOTE="user@100.74.25.27"
 REMOTE_DIST="/home/user/bacnet_mqtt_gateway/frontend_v2/dist"
 
 echo "▶ Building frontend..."
