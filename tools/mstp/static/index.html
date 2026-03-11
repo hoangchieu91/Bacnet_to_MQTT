@@ -143,6 +143,12 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <span id="networkLabel" style="font-size:11px;color:var(--muted);background:#1e2740;
     padding:3px 10px;border-radius:99px;font-family:monospace;">/dev/ttyUSB0 @ 38400</span>
   <div style="flex:1"></div>
+  <div style="display:flex;gap:6px;margin-right:8px;">
+    <a href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8080','_blank')" style="font-size:11px;padding:4px 10px;border-radius:99px;border:1px solid var(--border);color:var(--muted);text-decoration:none;transition:.2s;white-space:nowrap;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+      <span id="nsGw" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;background:var(--red);"></span>Gateway V2</a>
+    <a href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8766','_blank')" style="font-size:11px;padding:4px 10px;border-radius:99px;border:1px solid var(--border);color:var(--muted);text-decoration:none;transition:.2s;white-space:nowrap;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
+      <span id="nsMb" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;background:var(--red);"></span>📟 Modbus RTU</a>
+  </div>
   <button class="btn btn-sm" onclick="triggerScan()">⟳ Scan</button>
 </header>
 
@@ -733,6 +739,17 @@ async function triggerScan(){
   await fetch('/api/scan',{method:'POST'}).catch(()=>{});
 }
 
+// ── Nav status ────────────────────────────────────────────────────────────────
+async function checkNav(){
+  const checks=[{port:8080,id:'nsGw',path:'/api/auth/status'},{port:8766,id:'nsMb',path:'/api/sniffer/report'}];
+  for(const c of checks){
+    try{
+      await fetch(`${location.protocol}//${location.hostname}:${c.port}${c.path}`,{mode:'no-cors',signal:AbortSignal.timeout(2000)});
+      document.getElementById(c.id).style.background='var(--green)';
+    }catch(e){document.getElementById(c.id).style.background='var(--red)';}
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init(){
   try{
@@ -747,6 +764,8 @@ async function init(){
   }catch(e){ console.warn('Init',e); }
   renderGrid();
   connect();
+  checkNav();
+  setInterval(checkNav, 30000);
 }
 init();
 </script>

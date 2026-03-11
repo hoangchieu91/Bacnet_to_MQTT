@@ -1,0 +1,16 @@
+[Unit]
+Description=Modbus RTU Tools Dashboard
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/bacnet_mqtt_gateway/tools/modbus
+ExecStart=/home/pi/bacnet_mqtt_gateway/venv/bin/python3 /home/pi/bacnet_mqtt_gateway/tools/modbus/dashboard.py --config /home/pi/bacnet_mqtt_gateway/tools/modbus/config.yaml
+Restart=on-failure
+RestartSec=10
+Nice=-10
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

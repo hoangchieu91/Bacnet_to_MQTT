@@ -1,0 +1,7 @@
+# Modbus RTU Tools — Python dependencies
+pyserial>=3.5
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+PyYAML>=6.0
+python-multipart>=0.0.6

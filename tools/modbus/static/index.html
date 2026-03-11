@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Modbus RTU Tools</title>
+<style>
+:root{
+  --bg:#0d111a;--surface:#161c2a;--surface2:#1e2740;--border:#2a3245;
+  --text:#e2e8f0;--muted:#64748b;--accent:#f59e0b;
+  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;
+  --purple:#a855f7;--blue:#38bdf8;--radius:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh;}
+
+/* ── Header ────────────────────────────────── */
+header{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:12px 20px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
+.ws-dot{width:8px;height:8px;border-radius:50%;background:var(--red);flex-shrink:0;
+  animation:pulse 2s infinite;}
+.ws-dot.ok{background:var(--green);}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* ── Nav links ─────────────────────────────── */
+.nav-links{display:flex;gap:6px;margin-left:auto;}
+.nav-link{font-size:11px;padding:4px 10px;border-radius:99px;
+  border:1px solid var(--border);color:var(--muted);text-decoration:none;
+  transition:.2s;white-space:nowrap;}
+.nav-link:hover{border-color:var(--accent);color:var(--text);}
+.nav-status{display:inline-block;width:6px;height:6px;border-radius:50%;
+  margin-right:4px;background:var(--red);}
+.nav-status.up{background:var(--green);}
+
+/* ── Tab bar ────────────────────────────────── */
+.tabs{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 20px;display:flex;gap:2px;overflow-x:auto;}
+.tab{padding:10px 18px;font-size:12px;font-weight:600;cursor:pointer;
+  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;transition:.15s;}
+.tab:hover{color:var(--text);}
+.tab.active{border-bottom-color:var(--accent);color:var(--accent);}
+
+/* ── Layout ─────────────────────────────────── */
+.page{display:none;padding:18px 20px;max-width:1360px;margin:0 auto;}
+.page.active{display:block;}
+
+/* ── Cards ───────────────────────────────────── */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
+.card-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;}
+.two-col{display:grid;grid-template-columns:1fr 340px;gap:14px;}
+@media(max-width:900px){.two-col{grid-template-columns:1fr;}}
+
+/* ── Stats row ───────────────────────────────── */
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px;}
+@media(max-width:700px){.stats-row{grid-template-columns:repeat(2,1fr);}
+  .stats-row>.stat:last-child{grid-column:span 2;}}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:14px;text-align:center;}
+.stat-val{font-size:1.5rem;font-weight:800;}
+.stat-lbl{font-size:10px;color:var(--muted);margin-top:2px;}
+.green{color:var(--green);} .red{color:var(--red);} .yellow{color:var(--yellow);}
+.orange{color:var(--orange);} .purple{color:var(--purple);} .blue{color:var(--blue);}
+
+/* ── Bus utilization ring ────────────────────── */
+.util-ring{position:relative;width:80px;height:80px;flex-shrink:0;}
+.util-ring svg{transform:rotate(-90deg);}
+.util-ring-label{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;font-size:14px;font-weight:800;}
+.util-ring-sub{font-size:9px;color:var(--muted);margin-top:1px;}
+
+/* ── Pathologies ─────────────────────────────── */
+.path-list{display:flex;flex-direction:column;gap:8px;}
+.path-item{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;
+  border-radius:6px;border:1px solid var(--border);}
+.path-item.critical{background:#1a0a0a;border-color:var(--red);}
+.path-item.warning{background:#1a1200;border-color:var(--yellow);}
+.path-item.info{background:#0d1a24;border-color:var(--blue);}
+.path-code{font-size:10px;font-weight:700;font-family:monospace;margin-bottom:3px;opacity:.7;}
+.path-desc{font-size:12px;}
+.path-detail{font-size:11px;color:var(--muted);margin-top:4px;}
+
+/* ── Table ───────────────────────────────────── */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.tbl th{text-align:left;padding:6px 10px;background:var(--surface2);
+  color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.05em;}
+.tbl td{padding:6px 10px;border-top:1px solid var(--border);}
+.tbl tr:hover td{background:#1a2136;}
+
+/* ── Config & buttons ─────────────────────────────── */
+.cfg-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+@media(max-width:600px){.cfg-grid{grid-template-columns:1fr;}}
+.cfg-section{font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:700;text-transform:uppercase;}
+.field-row{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:8px;font-size:12px;}
+.inp{background:#0d111a;border:1px solid var(--border);border-radius:5px;
+  padding:7px 10px;color:var(--text);font-size:12px;width:100%;}
+.inp:focus{outline:none;border-color:var(--accent);}
+.btn{background:linear-gradient(135deg,#d97706,#b45309);color:#fff;
+  border:none;border-radius:6px;padding:8px 16px;font-size:12px;
+  font-weight:700;cursor:pointer;transition:opacity .2s;white-space:nowrap;}
+.btn:disabled{opacity:.4;cursor:default;}
+.btn:hover:not(:disabled){opacity:.85;}
+.btn-sm{padding:5px 12px;font-size:11px;}
+.btn-success{background:linear-gradient(135deg,#16a34a,#065f46);}
+
+/* ── Frame type badges ─────────────────────── */
+.badge-req{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;
+  background:#1e3a5f;color:var(--blue);}
+.badge-rsp{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;
+  background:#14532d;color:var(--green);}
+.badge-exc{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;
+  background:#450a0a;color:var(--red);}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="ws-dot" id="wsStatus"></div>
+  <h1>📟 Modbus RTU Tools</h1>
+  <span id="networkLabel" style="font-size:11px;color:var(--muted);background:#1e2740;
+    padding:3px 10px;border-radius:99px;font-family:monospace;">/dev/ttyUSB0 @ 9600</span>
+  <div class="nav-links">
+    <a class="nav-link" id="navGateway" href="#" onclick="navTo(8080)">
+      <span class="nav-status" id="nsGateway"></span>Gateway V2</a>
+    <a class="nav-link" id="navMstp" href="#" onclick="navTo(8765)">
+      <span class="nav-status" id="nsMstp"></span>MS/TP Tools</a>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('health')">📡 Bus Health</div>
+  <div class="tab" onclick="showTab('frames')">📋 Frame Log</div>
+  <div class="tab" onclick="showTab('config')">⚙️ Config</div>
+</div>
+
+<!-- ══════════ TAB: BUS HEALTH ══════════ -->
+<div class="page active" id="page-health">
+  <div class="stats-row">
+    <div class="stat">
+      <div style="display:flex;justify-content:center;margin-bottom:4px;">
+        <div class="util-ring">
+          <svg width="80" height="80" viewBox="0 0 80 80">
+            <circle cx="40" cy="40" r="32" fill="none" stroke="#252f48" stroke-width="8"/>
+            <circle id="utilCircle" cx="40" cy="40" r="32" fill="none"
+              stroke="var(--accent)" stroke-width="8" stroke-dasharray="201 201" stroke-dashoffset="201"/>
+          </svg>
+          <div class="util-ring-label">
+            <span id="utilPct">—</span>
+            <span class="util-ring-sub">util%</span>
+          </div>
+        </div>
+      </div>
+      <div class="stat-lbl">Bus Utilization</div>
+    </div>
+    <div class="stat"><div class="stat-val blue" id="sFPS">—</div><div class="stat-lbl">Frames/s</div></div>
+    <div class="stat"><div class="stat-val green" id="sReq">—</div><div class="stat-lbl">Total Requests</div></div>
+    <div class="stat"><div class="stat-val yellow" id="sBadPct">—</div><div class="stat-lbl">Bad CRC %</div></div>
+    <div class="stat"><div class="stat-val red" id="sExc">—</div><div class="stat-lbl">Exceptions</div></div>
+  </div>
+
+  <!-- Pathologies -->
+  <div class="card">
+    <div class="card-title">
+      <span>🩺 Diagnostics</span>
+      <button class="btn btn-sm" onclick="refresh()">↻ Refresh</button>
+    </div>
+    <div class="path-list" id="pathList"><div style="color:var(--muted);font-size:12px">Loading…</div></div>
+  </div>
+
+  <!-- Slave stats table -->
+  <div class="card">
+    <div class="card-title">Per-Slave Statistics</div>
+    <div style="overflow-x:auto;">
+      <table class="tbl">
+        <thead><tr>
+          <th>Slave</th><th>Frames/s</th><th>Req</th><th>Rsp</th><th>Exc</th>
+          <th>Bad CRC</th><th>Avg (ms)</th><th>Max (ms)</th><th>Functions</th>
+        </tr></thead>
+        <tbody id="slaveStatsBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: FRAME LOG ══════════ -->
+<div class="page" id="page-frames">
+  <div class="card">
+    <div class="card-title">
+      <span>📋 Recent Modbus RTU Frames</span>
+      <div>
+        <label style="font-size:11px;color:var(--muted);cursor:pointer;margin-right:10px;">
+          <input type="checkbox" id="autoRefresh" checked onchange="toggleAuto()"/> Auto-refresh
+        </label>
+        <button class="btn btn-sm" onclick="loadFrames()">↻ Refresh</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table class="tbl">
+        <thead><tr>
+          <th>Time</th><th>Type</th><th>Slave</th><th>Function</th><th>Data (B)</th><th>CRC</th><th>Exception</th>
+        </tr></thead>
+        <tbody id="frameLogBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: CONFIG ══════════ -->
+<div class="page" id="page-config">
+  <div class="two-col">
+    <div>
+      <div class="card">
+        <div class="card-title">⚙️ Modbus RTU Configuration</div>
+        <div class="cfg-grid">
+          <div>
+            <div class="cfg-section">Serial Port</div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Port</label>
+              <select class="inp" id="cfgPort">
+                <option>/dev/ttyUSB0</option>
+                <option>/dev/ttyUSB1</option>
+                <option>/dev/ttyAMA0</option>
+                <option>/dev/ttyS0</option>
+              </select>
+            </div>
+            <div class="field-row" style="margin-bottom:8px;">
+              <label style="font-size:12px">Baud Rate</label>
+              <select class="inp" id="cfgBaud">
+                <option selected>9600</option>
+                <option>19200</option>
+                <option>38400</option>
+                <option>57600</option>
+                <option>115200</option>
+              </select>
+            </div>
+            <div class="field-row">
+              <label style="font-size:12px">Parity</label>
+              <select class="inp" id="cfgParity">
+                <option value="N" selected>None</option>
+                <option value="E">Even</option>
+                <option value="O">Odd</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <div class="cfg-section">Reference</div>
+            <div style="font-size:11px;color:var(--muted);line-height:1.8;">
+              <p><b style="color:var(--text)">Common settings:</b></p>
+              <p>• Energy meters: <code>9600, N, 1</code></p>
+              <p>• VFD / Inverters: <code>19200, E, 1</code></p>
+              <p>• PLC: <code>38400, N, 1</code></p>
+              <p>• High-speed: <code>115200, N, 1</code></p>
+              <br>
+              <p><b style="color:var(--text)">Common function codes:</b></p>
+              <p>• 0x03 — Read Holding Registers</p>
+              <p>• 0x04 — Read Input Registers</p>
+              <p>• 0x06 — Write Single Register</p>
+              <p>• 0x10 — Write Multiple Registers</p>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;align-items:center;">
+          <button class="btn" onclick="saveConfig()">💾 Save & Restart</button>
+          <span id="cfgStatus" style="font-size:11px;color:var(--muted)"></span>
+        </div>
+        <div style="margin-top:10px;padding:10px;background:#0a0d14;border-radius:6px;font-size:11px;color:var(--muted);">
+          ⚠️ Thay đổi cần restart service: <code>sudo systemctl restart modbus-rtu-tools</code>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🔍 Detect Ports</div>
+        <button class="btn btn-sm btn-success" onclick="detectPorts()">🔍 Scan Ports</button>
+        <div id="portList" style="margin-top:10px;font-family:monospace;font-size:12px;"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="card-title">📊 Live Status</div>
+        <div id="liveStatus" style="font-size:12px;color:var(--muted);line-height:1.9;">Loading…</div>
+      </div>
+      <div class="card">
+        <div class="card-title">💡 CLI Usage</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;">
+          <code style="display:block;background:#0a0d14;padding:8px;border-radius:4px;margin:4px 0;word-break:break-all;">
+python3 modbus_sniffer.py --port /dev/ttyUSB0 --baud 9600 --duration 60 --frames</code>
+          <br>
+          <code style="display:block;background:#0a0d14;padding:8px;border-radius:4px;margin:4px 0;word-break:break-all;">
+python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let ws = null;
+let autoRefreshTimer = null;
+
+// ── Nav ───────────────────────────────────────────────────────────────────────
+function navTo(port) {
+  const url = `${location.protocol}//${location.hostname}:${port}`;
+  window.open(url, '_blank');
+}
+
+async function checkNavStatus() {
+  const checks = [
+    {port: 8080, id: 'nsGateway', path: '/api/auth/status'},
+    {port: 8765, id: 'nsMstp', path: '/api/sniffer/report'},
+  ];
+  for (const c of checks) {
+    try {
+      const r = await fetch(`${location.protocol}//${location.hostname}:${c.port}${c.path}`,
+        {mode:'no-cors', signal: AbortSignal.timeout(2000)});
+      document.getElementById(c.id).classList.add('up');
+    } catch(e) {
+      document.getElementById(c.id).classList.remove('up');
+    }
+  }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach((t,i) => {
+    const ids=['health','frames','config'];
+    t.classList.toggle('active', ids[i]===name);
+  });
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  if (name==='health') refresh();
+  if (name==='frames') loadFrames();
+  if (name==='config') loadStatus();
+}
+
+// ── WebSocket ─────────────────────────────────────────────────────────────────
+function connect() {
+  const proto = location.protocol==='https:'?'wss':'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => document.getElementById('wsStatus').classList.add('ok');
+  ws.onclose = () => { document.getElementById('wsStatus').classList.remove('ok'); setTimeout(connect,3000); };
+  ws.onmessage = e => {
+    const msg = JSON.parse(e.data);
+    if (msg.type==='init' && msg.report) renderReport(msg.report);
+    if (msg.type==='pathology') appendPathEvent(msg);
+  };
+}
+
+// ── Refresh ───────────────────────────────────────────────────────────────────
+async function refresh() {
+  try {
+    const report = await fetch('/api/sniffer/report').then(r=>r.json());
+    renderReport(report);
+  } catch(e) { console.warn('Refresh fail', e); }
+}
+
+function renderReport(r) {
+  if (!r || r.enabled===false) return;
+  // Stats
+  document.getElementById('sFPS').textContent = r.frames_per_s??'—';
+  document.getElementById('sReq').textContent = r.total_requests??'—';
+  document.getElementById('sBadPct').textContent = (r.bad_frame_pct??'—')+'%';
+  document.getElementById('sExc').textContent = r.total_exceptions??'—';
+
+  // Utilization ring
+  const util = r.bus_utilization_pct||0;
+  document.getElementById('utilPct').textContent = util+'%';
+  const circ = document.getElementById('utilCircle');
+  const c = 2*Math.PI*32;
+  circ.setAttribute('stroke-dashoffset', c*(1-util/100));
+  circ.setAttribute('stroke', util>90?'var(--red)':util>70?'var(--yellow)':'var(--accent)');
+
+  // Pathologies
+  renderPathologies(r.pathologies||[]);
+  // Slave stats
+  renderSlaveStats(r.slaves||[]);
+}
+
+function renderPathologies(list) {
+  const el = document.getElementById('pathList');
+  if (!list.length) {
+    el.innerHTML = '<div style="color:var(--green);font-size:12px;">✅ No issues detected</div>';
+    return;
+  }
+  el.innerHTML = list.map(p => `
+    <div class="path-item ${p.severity}">
+      <span style="font-size:18px">${{critical:'🔴',warning:'🟡',info:'🔵'}[p.severity]||'•'}</span>
+      <div><div class="path-code">${p.code}</div>
+      <div class="path-desc">${p.description}</div>
+      ${p.detail?`<div class="path-detail">${p.detail}</div>`:''}
+      ${p.slaves_involved?.length?`<div class="path-detail">Slaves: ${p.slaves_involved.join(', ')}</div>`:''}
+      </div>
+    </div>`).join('');
+}
+
+function renderSlaveStats(slaves) {
+  const tb = document.getElementById('slaveStatsBody');
+  tb.innerHTML = slaves.map(s => {
+    const funcs = Object.entries(s.function_codes||{}).map(([k,v])=>`${k}:${v}`).join(', ')||'—';
+    return `<tr>
+      <td><b>${s.slave_id}</b></td>
+      <td>${s.frames_per_s}</td>
+      <td>${s.requests}</td>
+      <td>${s.responses}</td>
+      <td>${s.exceptions}${s.exceptions>0?` <span style="color:var(--red)">(${Object.entries(s.exception_codes||{}).map(([k,v])=>k+':'+v).join(', ')})</span>`:''}</td>
+      <td>${s.bad_crc}${s.bad_crc_pct>5?` <span style="color:var(--red)">(${s.bad_crc_pct}%)</span>`:''}</td>
+      <td>${s.avg_resp_ms!=null?s.avg_resp_ms:'—'}</td>
+      <td>${s.max_resp_ms!=null?s.max_resp_ms:'—'}</td>
+      <td style="font-size:10px;color:var(--muted);max-width:200px;overflow:hidden;text-overflow:ellipsis">${funcs}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Frame log ─────────────────────────────────────────────────────────────────
+async function loadFrames() {
+  try {
+    const frames = await fetch('/api/sniffer/frames?limit=50').then(r=>r.json());
+    const tb = document.getElementById('frameLogBody');
+    tb.innerHTML = frames.slice(-50).reverse().map(f => {
+      const badge = f.is_exc?'badge-exc':f.is_req?'badge-req':'badge-rsp';
+      const type = f.is_exc?'EXC':f.is_req?'REQ':'RSP';
+      return `<tr>
+        <td style="font-family:monospace;font-size:10px">${f.ts.toFixed(3)}</td>
+        <td><span class="${badge}">${type}</span></td>
+        <td><b>${f.slave}</b></td>
+        <td>${f.func}</td>
+        <td>${f.len}</td>
+        <td>${f.valid?'✓':'<span style="color:var(--red)">✗</span>'}</td>
+        <td>${f.exc_name||'—'}</td>
+      </tr>`;
+    }).join('');
+  } catch(e) { console.warn('loadFrames', e); }
+}
+
+function toggleAuto() {
+  if (document.getElementById('autoRefresh').checked) {
+    autoRefreshTimer = setInterval(loadFrames, 2000);
+  } else {
+    clearInterval(autoRefreshTimer);
+  }
+}
+
+function appendPathEvent(ev) {
+  // Just trigger full refresh for simplicity
+  refresh();
+}
+
+// ── Config ────────────────────────────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const r = await fetch('/api/sniffer/report').then(r=>r.json());
+    document.getElementById('liveStatus').innerHTML = `
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">Total frames</span><span>${r.total_frames??'—'}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">Slaves seen</span><span>${r.slave_count??'—'}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">Baud rate</span><span>${r.baudrate??'—'}</span></div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);">
+        <span style="color:var(--muted)">Duration</span><span>${r.duration_s??'—'}s</span></div>
+      <div style="display:flex;justify-content:space-between;padding:5px 0;">
+        <span style="color:var(--muted)">Bus util</span><span>${r.bus_utilization_pct??'—'}%</span></div>
+    `;
+  } catch(e) {}
+}
+
+async function saveConfig() {
+  const cfg = {
+    serial: {
+      port: document.getElementById('cfgPort').value,
+      baudrate: parseInt(document.getElementById('cfgBaud').value),
+      parity: document.getElementById('cfgParity').value,
+    }
+  };
+  try {
+    await fetch('/api/config', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    document.getElementById('cfgStatus').textContent = '✅ Saved — restart service to apply';
+    document.getElementById('networkLabel').textContent = `${cfg.serial.port} @ ${cfg.serial.baudrate}`;
+    setTimeout(()=>document.getElementById('cfgStatus').textContent='', 5000);
+  } catch(e) { document.getElementById('cfgStatus').textContent = '❌ '+e; }
+}
+
+async function detectPorts() {
+  try {
+    const r = await fetch('/api/serial-ports').then(r=>r.json());
+    const el = document.getElementById('portList');
+    if (r.ports?.length) {
+      el.innerHTML = r.ports.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--border)">
+        ${p.port} <span style="color:var(--muted)">— ${p.description||'Serial'}</span>
+        <button class="btn btn-sm" style="margin-left:8px;padding:2px 8px"
+          onclick="document.getElementById('cfgPort').value='${p.port}'">Use</button>
+      </div>`).join('');
+    } else {
+      el.innerHTML = '<span style="color:var(--red)">No serial ports found</span>';
+    }
+  } catch(e) { document.getElementById('portList').textContent = 'Error: '+e; }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function init() {
+  refresh();
+  connect();
+  checkNavStatus();
+  toggleAuto();
+  setInterval(checkNavStatus, 30000);
+  setInterval(refresh, 5000);
+}
+init();
+</script>
+</body>
+</html>

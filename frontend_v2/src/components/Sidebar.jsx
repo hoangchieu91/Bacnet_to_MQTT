@@ -100,6 +100,21 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
         ))}
       </nav>
 
+      {/* External Tools */}
+      {!collapsed && (
+        <div className="px-3 py-2 border-t border-border">
+          <div className="px-2 mb-1 text-[9px] font-bold tracking-widest text-text-muted uppercase">Tools</div>
+          <a href={`${window.location.protocol}//${window.location.hostname}:8765`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all">
+            🔌 MS/TP Tools
+          </a>
+          <a href={`${window.location.protocol}//${window.location.hostname}:8766`} target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all">
+            📟 Modbus RTU
+          </a>
+        </div>
+      )}
+
       {/* Status footer */}
       <div className={`px-3 py-3 border-t border-border space-y-1.5 ${collapsed ? 'flex flex-col items-center' : ''}`}>
         <div className="flex items-center gap-1.5">

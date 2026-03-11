@@ -1,0 +1,18 @@
+# Modbus RTU Tools Configuration
+# Copy and edit this file before running
+
+serial:
+  port: /dev/ttyUSB0        # USB-RS485 adapter port (check with: ls /dev/ttyUSB*)
+  baudrate: 9600             # Common: 9600 / 19200 / 38400 / 115200
+  parity: "N"                # N=None / E=Even / O=Odd
+  stopbits: 1                # 1 or 2
+
+sniffer:
+  enabled: true              # Run passive frame sniffer
+  diag_interval_s: 5         # Run diagnostics every N seconds
+  frame_log_size: 500        # Rolling frame log size
+
+api:
+  host: 0.0.0.0
+  port: 8766                 # Dashboard accessible at http://<pi-ip>:8766
+  debug: false
