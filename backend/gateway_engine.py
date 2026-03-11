@@ -553,89 +553,98 @@ class GatewayEngine:
         1 RPM packet reads N presentValues simultaneously instead of N serial requests.
         Falls back transparently to single-read if RPM fails (device quirk or BAC0 issue).
         Only used for BACnet/IP devices; MS/TP goes through _poll_single_locked.
+
+        IMPORTANT: fallback single-reads are dispatched OUTSIDE the lock so that
+        lock contention with MS/TP polling is minimised.  analogInput objects
+        often return None from RPM (device doesn't support RPM for read-only types)
+        and must not block the shared read lock while retrying individually.
         """
         if not mappings:
             return
 
         first = mappings[0]
         device_id = first.device_id
+        # Collect mappings that need individual retry after releasing the lock
+        retry_singles: list[PointMapping] = []
 
         async with self._bacnet_read_lock:
             try:
                 address = self._bacnet.get_device_address(device_id)
                 if not address:
-                    # No address yet — fall back to individual reads
-                    for m in mappings:
-                        await self._poll_single(m)
-                    return
+                    # No address yet — mark all for individual retry outside the lock
+                    retry_singles.extend(mappings)
+                else:
+                    # Build object list for RPM: (object_type, instance)
+                    objects = [(m.object_type, m.object_instance) for m in mappings]
 
-                # Build object list for RPM: (object_type, instance)
-                objects = [(m.object_type, m.object_instance) for m in mappings]
+                    # Read presentValue for all objects in one RPM packet
+                    batch_results = await self._bacnet.read_multiple_objects(
+                        address, objects, properties=["presentValue"]
+                    )
 
-                # Read presentValue for all objects in one RPM packet
-                batch_results = await self._bacnet.read_multiple_objects(
-                    address, objects, properties=["presentValue"]
-                )
+                    now_str = datetime.now(timezone.utc).isoformat()
 
-                now_str = datetime.now(timezone.utc).isoformat()
+                    for mapping in mappings:
+                        key = (mapping.object_type, mapping.object_instance)
+                        obj_data = batch_results.get(key, {})
+                        value = obj_data.get("presentValue")
 
-                for mapping in mappings:
-                    key = (mapping.object_type, mapping.object_instance)
-                    obj_data = batch_results.get(key, {})
-                    value = obj_data.get("presentValue")
+                        if value is not None:
+                            # Update mapping state
+                            mapping.last_value = value
+                            mapping.last_updated = now_str
+                            self._on_device_poll_success(device_id, address)
 
-                    if value is not None:
-                        # Update mapping state
-                        mapping.last_value = value
-                        mapping.last_updated = now_str
-                        self._on_device_poll_success(device_id, address)
+                            # Record to history DB
+                            if self._history:
+                                try:
+                                    self._history.record(mapping.id, value)
+                                except Exception as he:
+                                    logger.debug("History record error: %s", he)
 
-                        # Record to history DB
-                        if self._history:
-                            try:
-                                self._history.record(mapping.id, value)
-                            except Exception as he:
-                                logger.debug("History record error: %s", he)
+                            # Publish to MQTT
+                            prefix = self._cm.config.mqtt.topic_prefix
+                            base_topic = mapping.mqtt_topic or \
+                                f"{prefix}/{device_id}/{mapping.object_type}/{mapping.object_instance}"
+                            value_payload = {
+                                "value": value,
+                                "object_type": mapping.object_type,
+                                "object_instance": mapping.object_instance,
+                                "device_id": device_id,
+                                "timestamp": now_str,
+                                "source": "rpm",
+                            }
+                            self._mqtt.publish(f"{base_topic}/value", value_payload)
 
-                        # Publish to MQTT
-                        prefix = self._cm.config.mqtt.topic_prefix
-                        base_topic = mapping.mqtt_topic or \
-                            f"{prefix}/{device_id}/{mapping.object_type}/{mapping.object_instance}"
-                        value_payload = {
-                            "value": value,
-                            "object_type": mapping.object_type,
-                            "object_instance": mapping.object_instance,
-                            "device_id": device_id,
-                            "timestamp": now_str,
-                            "source": "rpm",
-                        }
-                        self._mqtt.publish(f"{base_topic}/value", value_payload)
+                            # Broadcast WebSocket
+                            await self._ws.broadcast({
+                                "type": "point_update",
+                                "mapping_id": mapping.id,
+                                "label": mapping.label,
+                                "read_mode": mapping.read_mode,
+                                **value_payload,
+                            })
+                        else:
+                            # RPM returned None for this object (common for analogInput/read-only
+                            # types on some devices) — collect for individual retry outside lock.
+                            logger.debug("[RPM] %s obj %s:%s returned None — queuing single retry",
+                                         address, mapping.object_type, mapping.object_instance)
+                            retry_singles.append(mapping)
 
-                        # Broadcast WebSocket
-                        await self._ws.broadcast({
-                            "type": "point_update",
-                            "mapping_id": mapping.id,
-                            "label": mapping.label,
-                            "read_mode": mapping.read_mode,
-                            **value_payload,
-                        })
-                    else:
-                        # RPM returned None for this object — schedule individual retry
-                        logger.debug("[RPM] %s obj %s:%s returned None — retrying single",
-                                     address, mapping.object_type, mapping.object_instance)
-                        await self._poll_single(mapping)
-
-                logger.debug("[RPM] %s: polled %d objects in 1 batch request", address, len(mappings))
+                    logger.debug("[RPM] %s: polled %d objects in 1 RPM, %d queued for retry",
+                                 address, len(mappings) - len(retry_singles), len(retry_singles))
 
             except Exception as exc:
-                logger.warning("[RPM] Batch poll failed for device %d (%s): %s — falling back",
-                               device_id, first.device_id, exc)
-                # Full fallback: poll all individually
-                for m in mappings:
-                    try:
-                        await self._poll_single(m)
-                    except Exception as fe:
-                        logger.debug("[RPM] Single fallback error %s: %s", m.id, fe)
+                logger.warning("[RPM] Batch poll failed for device %d (addr=%s): %s — falling back to single",
+                               device_id, self._bacnet.get_device_address(device_id), exc)
+                # Full fallback: all mappings need individual retry
+                retry_singles.extend(mappings)
+
+        # ── Dispatch single-read retries OUTSIDE the lock ────────────────────
+        # Each _poll_single_locked will acquire the lock independently, allowing
+        # MSTP serial reads to interleave instead of being blocked by this batch.
+        for m in retry_singles:
+            asyncio.create_task(self._poll_single_locked(m))
 
     async def _poll_single(self, mapping: PointMapping) -> None:
         """Read presentValue + priorityArray and publish to MQTT + WebSocket."""

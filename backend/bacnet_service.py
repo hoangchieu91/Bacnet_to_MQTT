@@ -388,25 +388,48 @@ class BacnetService:
                 address, obj_specs
             )
 
-            # rpm_result: list of results matching obj_specs order
-            if rpm_result and isinstance(rpm_result, (list, tuple)):
-                for idx, (ot_raw, inst) in enumerate(objects):
-                    try:
-                        raw = rpm_result[idx] if idx < len(rpm_result) else None
+            # rpm_result: list of results matching obj_specs order.
+            # Some BAC0 versions return a dict keyed by (obj_type, instance);
+            # normalise to list form before indexing.
+            if rpm_result is not None:
+                result_list: list | None = None
+                if isinstance(rpm_result, (list, tuple)):
+                    result_list = list(rpm_result)
+                elif isinstance(rpm_result, dict):
+                    # Dict form: {(obj_type, inst): value_or_dict, ...}
+                    # Re-map using our original (ot_raw, inst) keys
+                    for idx, (ot_raw, inst) in enumerate(objects):
+                        ot_norm = _normalize_type(ot_raw)
+                        raw = rpm_result.get((ot_norm, inst)) or rpm_result.get((ot_raw, inst))
                         if raw is None:
                             results[(ot_raw, inst)] = {}
-                            continue
-                        # raw may be a dict {prop: value} or just a value (single prop)
-                        if isinstance(raw, dict):
+                        elif isinstance(raw, dict):
                             results[(ot_raw, inst)] = raw
                         elif len(props) == 1:
                             results[(ot_raw, inst)] = {props[0]: raw}
                         else:
                             results[(ot_raw, inst)] = {}
-                    except (IndexError, TypeError):
-                        results[(ot_raw, inst)] = {}
-                logger.debug("[RPM] %s: batch-read %d objects OK", address, len(objects))
-                return results
+                    logger.debug("[RPM] %s: batch-read %d objects OK (dict form)", address, len(objects))
+                    return results
+
+                if result_list is not None and len(result_list) > 0:
+                    for idx, (ot_raw, inst) in enumerate(objects):
+                        try:
+                            raw = result_list[idx] if idx < len(result_list) else None
+                            if raw is None:
+                                results[(ot_raw, inst)] = {}
+                                continue
+                            # raw may be a dict {prop: value} or just a value (single prop)
+                            if isinstance(raw, dict):
+                                results[(ot_raw, inst)] = raw
+                            elif len(props) == 1:
+                                results[(ot_raw, inst)] = {props[0]: raw}
+                            else:
+                                results[(ot_raw, inst)] = {}
+                        except (IndexError, TypeError):
+                            results[(ot_raw, inst)] = {}
+                    logger.debug("[RPM] %s: batch-read %d objects OK", address, len(objects))
+                    return results
 
         except Exception as exc:
             logger.debug("[RPM] %s: readMultiple failed (%s) → fallback to single reads", address, exc)
