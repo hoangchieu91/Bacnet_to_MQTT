@@ -8,6 +8,11 @@ Endpoints:
   GET  /api/serial-ports     → available serial ports
   PUT  /api/config           → update config.yaml
   WS   /ws                   → realtime events
+
+  Dual-Pi Correlator (Mode 3):
+   GET  /api/correlator/report → cross-correlation report
+   GET  /api/correlator/status → Pi-2 connection status
+   PUT  /api/correlator/config → update Pi-2 URL
 """
 from __future__ import annotations
 
@@ -23,12 +28,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse
 
 from modbus_sniffer import ModbusSniffer, Pathology
+from modbus_correlator import DualPiCorrelator
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.0.0")
+app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.1.0")
 
 _sniffer: ModbusSniffer | None = None
+_correlator: DualPiCorrelator | None = None
 _clients: set[WebSocket] = set()
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -50,7 +57,7 @@ async def _broadcast(event: dict) -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
-    global _sniffer
+    global _sniffer, _correlator
     cfg_path = "config.yaml"
 
     with open(cfg_path) as f:
@@ -74,11 +81,30 @@ async def startup() -> None:
             logger.error("[Dashboard] Sniffer failed to start: %s", exc)
             _sniffer = None
 
+    # ── Dual-Pi Correlator ─────────────────────────────────────────────────
+    dual_cfg = cfg.get("dual_pi", {})
+    if dual_cfg.get("enabled", False):
+        try:
+            _correlator = DualPiCorrelator(
+                pi2_url=dual_cfg.get("pi2_url", "http://10.25.7.22:8766"),
+                poll_interval=dual_cfg.get("poll_interval_s", 5.0),
+                correlation_window_ms=dual_cfg.get("correlation_window_ms", 50.0),
+            )
+            _get_report = _sniffer.get_report if _sniffer else None
+            await _correlator.start(get_local_report=_get_report)
+            logger.info("[Dashboard] Dual-Pi Correlator started → %s",
+                        dual_cfg.get("pi2_url"))
+        except Exception as exc:
+            logger.error("[Dashboard] Correlator failed to start: %s", exc)
+            _correlator = None
+
     logger.info("[Dashboard] Startup complete")
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    if _correlator:
+        await _correlator.stop()
     if _sniffer:
         await _sniffer.stop()
 
@@ -112,6 +138,47 @@ async def sniffer_pathologies() -> list[dict]:
         return []
     report = _sniffer.get_report()
     return report.get("pathologies", [])
+
+
+# ── Dual-Pi Correlator API ────────────────────────────────────────────────────
+
+@app.get("/api/correlator/status")
+async def correlator_status() -> dict:
+    if not _correlator:
+        return {"enabled": False}
+    return _correlator.get_status()
+
+
+@app.get("/api/correlator/report")
+async def correlator_report() -> dict:
+    if not _correlator:
+        return {"available": False, "reason": "Correlator not enabled"}
+    return _correlator.get_correlation_report()
+
+
+@app.put("/api/correlator/config")
+async def update_correlator_config(body: dict) -> dict:
+    global _correlator
+    try:
+        with open("config.yaml") as f:
+            cfg = yaml.safe_load(f)
+        cfg.setdefault("dual_pi", {}).update(body)
+        with open("config.yaml", "w") as f:
+            yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+
+        # Hot-reload correlator if URL changed
+        if _correlator and body.get("pi2_url"):
+            await _correlator.stop()
+            _correlator = DualPiCorrelator(
+                pi2_url=body.get("pi2_url", _correlator.pi2_url),
+                poll_interval=body.get("poll_interval_s", _correlator.poll_interval),
+            )
+            _get_report = _sniffer.get_report if _sniffer else None
+            await _correlator.start(get_local_report=_get_report)
+
+        return {"status": "saved", "config": cfg.get("dual_pi", {})}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 # ── Serial port detection ─────────────────────────────────────────────────────

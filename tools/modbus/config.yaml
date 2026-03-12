@@ -16,3 +16,9 @@ api:
   host: 0.0.0.0
   port: 8766                 # Dashboard accessible at http://<pi-ip>:8766
   debug: false
+
+dual_pi:
+  enabled: false             # Set true when Pi-2 is available
+  pi2_url: "http://10.25.7.22:8766"   # Pi-2 Modbus RTU Tools URL
+  poll_interval_s: 5         # Poll Pi-2 every N seconds
+  correlation_window_ms: 50  # Frame matching tolerance (ms)

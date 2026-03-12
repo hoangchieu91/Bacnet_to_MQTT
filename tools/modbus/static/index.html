@@ -149,6 +149,42 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .diag-num{min-width:28px;height:28px;background:var(--surface2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--accent);}
 .diag-body h5{font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px;}
 .diag-body p{font-size:11px;color:var(--muted);line-height:1.5;}
+
+/* ── Dual-Pi page ──────────────────────────── */
+.dp-conn{display:flex;align-items:center;gap:12px;padding:14px 18px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);margin-bottom:16px;}
+.dp-conn .dp-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.dp-conn .dp-dot.online{background:var(--green);box-shadow:0 0 6px var(--green);}
+.dp-conn .dp-dot.offline{background:var(--red);box-shadow:0 0 6px var(--red);}
+.dp-conn .dp-info{flex:1;}
+.dp-conn .dp-url{font-family:monospace;font-size:11px;color:var(--muted);}
+.dp-conn .dp-latency{font-size:11px;color:var(--muted);}
+.dp-side{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
+@media(max-width:700px){.dp-side{grid-template-columns:1fr;}}
+.dp-col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
+.dp-col h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;display:flex;align-items:center;gap:6px;}
+.dp-col h4.pi1{color:var(--blue);}
+.dp-col h4.pi2{color:var(--purple);}
+.dp-metric{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;}
+.dp-metric:last-child{border-bottom:none;}
+.dp-metric .label{color:var(--muted);}
+.dp-metric .val{font-weight:700;font-family:monospace;}
+.dp-metric .val.good{color:var(--green);}
+.dp-metric .val.warn{color:var(--yellow);}
+.dp-metric .val.bad{color:var(--red);}
+.dp-pathology{padding:12px 16px;border-radius:var(--radius);border:1px solid var(--border);margin-bottom:8px;background:var(--surface);}
+.dp-pathology:hover{border-color:var(--accent);}
+.dp-pathology .dp-sev{font-size:14px;margin-right:8px;}
+.dp-pathology .dp-code{font-size:11px;font-weight:700;font-family:monospace;color:var(--accent);}
+.dp-pathology .dp-desc{font-size:12px;margin-top:4px;}
+.dp-pathology .dp-detail{font-size:11px;color:var(--muted);margin-top:4px;line-height:1.6;}
+.dp-pathology .dp-vals{display:flex;gap:16px;margin-top:6px;font-size:11px;}
+.dp-pathology .dp-vals span{padding:2px 8px;border-radius:4px;font-family:monospace;}
+.dp-pathology .dp-vals .v1{background:#1e3a5f;color:var(--blue);}
+.dp-pathology .dp-vals .v2{background:#2d1b69;color:var(--purple);}
+.dp-sig-map{background:#0a0d14;border:1px solid var(--border);border-radius:8px;padding:20px;margin-top:16px;}
+.dp-sig-bar{height:18px;border-radius:4px;margin:6px 0;position:relative;overflow:hidden;}
+.dp-sig-fill{height:100%;border-radius:4px;transition:width .5s;}
+.dp-sig-label{position:absolute;right:8px;top:2px;font-size:10px;font-weight:700;}
 </style>
 </head>
 <body>
@@ -170,6 +206,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="tab active" onclick="showTab('health')">📡 Bus Health</div>
   <div class="tab" onclick="showTab('frames')">📋 Frame Log</div>
   <div class="tab" onclick="showTab('config')">⚙️ Config</div>
+  <div class="tab" onclick="showTab('dualpi')">🔗 Dual-Pi</div>
   <div class="tab" onclick="showTab('about')">📖 About</div>
 </div>
 
@@ -330,6 +367,101 @@ python3 modbus_sniffer.py --port /dev/ttyUSB0 --baud 9600 --duration 60 --frames
 python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
         </div>
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ TAB: DUAL-PI ══════════ -->
+<div class="page" id="page-dualpi">
+  <!-- Connection Status -->
+  <div class="dp-conn" id="dpConn">
+    <div class="dp-dot offline" id="dpDot"></div>
+    <div class="dp-info">
+      <div style="font-size:13px;font-weight:700;">🔗 Pi-2 (Passive Sniffer)</div>
+      <div class="dp-url" id="dpUrl">—</div>
+    </div>
+    <div class="dp-latency" id="dpLatency"></div>
+    <div style="display:flex;gap:6px;align-items:center;">
+      <input class="inp" id="dpUrlInput" placeholder="http://10.25.7.22:8766" style="width:200px;font-size:11px;padding:4px 8px;">
+      <button class="btn btn-sm" onclick="saveDualPi()">💾</button>
+    </div>
+  </div>
+
+  <!-- Side-by-side comparison -->
+  <div class="dp-side">
+    <div class="dp-col">
+      <h4 class="pi1"><span style="font-size:16px;">🟦</span> Pi-1 — Inline (Đầu bus)</h4>
+      <div id="dpPi1Stats">
+        <div class="dp-metric"><span class="label">Total frames</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Frames/s</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">CRC errors</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Junk rate</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Bus util</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Slaves</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Duration</span><span class="val">—</span></div>
+      </div>
+    </div>
+    <div class="dp-col">
+      <h4 class="pi2"><span style="font-size:16px;">🟪</span> Pi-2 — Passive (Cuối bus)</h4>
+      <div id="dpPi2Stats">
+        <div class="dp-metric"><span class="label">Total frames</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Frames/s</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">CRC errors</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Junk rate</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Bus util</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Slaves</span><span class="val">—</span></div>
+        <div class="dp-metric"><span class="label">Duration</span><span class="val">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cross-correlation pathologies -->
+  <div class="card">
+    <div class="card-title">🔍 Cross-Correlation Diagnostics (Rules #16-23)</div>
+    <div id="dpPathologies" style="color:var(--muted);font-size:12px;">Waiting for data...</div>
+  </div>
+
+  <!-- Frame Loss Matrix -->
+  <div class="card" style="margin-top:14px;">
+    <div class="card-title">📊 Frame Loss per Slave</div>
+    <div style="overflow-x:auto;">
+      <table class="cmp-tbl" id="dpSlaveMatrix">
+        <thead><tr>
+          <th>Slave ID</th><th>Frames Pi-1</th><th>Frames Pi-2</th><th>Loss %</th><th>CRC Pi-1</th><th>CRC Pi-2</th>
+        </tr></thead>
+        <tbody id="dpSlaveBody"><tr><td colspan="6" style="color:var(--muted);text-align:center;">No data</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Signal Quality Map -->
+  <div class="dp-sig-map">
+    <div style="font-size:13px;font-weight:700;margin-bottom:12px;">📶 Signal Quality Map</div>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:4px;">
+      <span>🟦 Pi-1 (Đầu bus — gần Master)</span>
+      <span>🟪 Pi-2 (Cuối bus — xa nhất)</span>
+    </div>
+    <div style="background:var(--border);border-radius:4px;height:20px;position:relative;overflow:hidden;">
+      <div id="dpSigPi1" style="position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,var(--green),var(--blue));border-radius:4px;width:100%;transition:width .5s;"></div>
+    </div>
+    <div style="text-align:right;font-size:10px;color:var(--muted);margin:2px 0 8px;" id="dpSigPi1Label">CRC: —</div>
+    <div style="background:var(--border);border-radius:4px;height:20px;position:relative;overflow:hidden;">
+      <div id="dpSigPi2" style="position:absolute;left:0;top:0;height:100%;background:linear-gradient(90deg,var(--green),var(--purple));border-radius:4px;width:100%;transition:width .5s;"></div>
+    </div>
+    <div style="text-align:right;font-size:10px;color:var(--muted);margin:2px 0 0;" id="dpSigPi2Label">CRC: —</div>
+  </div>
+
+  <!-- Topology diagram -->
+  <div class="card" style="margin-top:14px;">
+    <div class="card-title">🖧 Topology</div>
+    <div class="wire-diagram">
+ ┌────────┐    ┌─[Pi-1 Inline]──┐    ┌────┐ ┌────┐    ┌─[Pi-2]─┐
+ │ MASTER ├─A──┤ComA        ComB├─A──┤ S1 ├─┤ S2 ├─A──┤Passive │
+ │ PLC    ├─B──┤                ├─B──┤    ├─┤    ├─B──┤Sniffer │
+ └────────┘    └────────────────┘    └────┘ └────┘    └────────┘
+ [120Ω]        segment 1 │ segment 2                   [120Ω]
+                         │
+                 Pi-1 cắt bus ở đây, forward A⇄B
     </div>
   </div>
 </div>
@@ -588,7 +720,7 @@ async function checkNavStatus() {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const ids=['health','frames','config','about'];
+    const ids=['health','frames','config','dualpi','about'];
     t.classList.toggle('active', ids[i]===name);
   });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -596,6 +728,7 @@ function showTab(name) {
   if (name==='health') refresh();
   if (name==='frames') loadFrames();
   if (name==='config') loadStatus();
+  if (name==='dualpi') loadDualPi();
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -759,6 +892,135 @@ async function detectPorts() {
       el.innerHTML = '<span style="color:var(--red)">No serial ports found</span>';
     }
   } catch(e) { document.getElementById('portList').textContent = 'Error: '+e; }
+}
+
+// ── Dual-Pi ───────────────────────────────────────────────────────────────────
+async function loadDualPi() {
+  try {
+    const [status, report] = await Promise.all([
+      fetch('/api/correlator/status').then(r=>r.json()),
+      fetch('/api/correlator/report').then(r=>r.json()),
+    ]);
+
+    // Connection status
+    const dot = document.getElementById('dpDot');
+    const urlEl = document.getElementById('dpUrl');
+    const latEl = document.getElementById('dpLatency');
+    const urlInput = document.getElementById('dpUrlInput');
+
+    if (status.enabled) {
+      dot.className = 'dp-dot ' + (status.pi2_online ? 'online' : 'offline');
+      urlEl.textContent = status.pi2_url || '—';
+      urlInput.value = status.pi2_url || '';
+      latEl.textContent = status.pi2_online && status.pi2_latency_ms
+        ? `${status.pi2_latency_ms}ms` : status.pi2_online ? 'Connected' : '⏳ Offline';
+    } else {
+      dot.className = 'dp-dot offline';
+      urlEl.textContent = 'Not enabled — set dual_pi.enabled=true in config.yaml';
+      latEl.textContent = '';
+    }
+
+    if (!report.available) {
+      document.getElementById('dpPathologies').innerHTML =
+        `<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">
+          ${report.reason || 'No correlation data available'}</div>`;
+      return;
+    }
+
+    // Side-by-side stats
+    const cmp = report.comparison || {};
+    function renderStats(el, key) {
+      const metrics = [
+        ['Total frames', cmp.total_frames?.[key] ?? '—'],
+        ['Frames/s', cmp.frames_per_s?.[key] ?? '—'],
+        ['CRC errors', (cmp.bad_frame_pct?.[key] ?? '—') + '%'],
+        ['Junk rate', (cmp.junk_rate_pct?.[key] ?? '—') + '%'],
+        ['Bus util', (cmp.bus_utilization_pct?.[key] ?? '—') + '%'],
+        ['Slaves', cmp.slave_count?.[key] ?? '—'],
+        ['Duration', (cmp.duration_s?.[key] ?? '—') + 's'],
+      ];
+      el.innerHTML = metrics.map(([label, val]) => {
+        let cls = '';
+        if (label === 'CRC errors') {
+          const v = parseFloat(val);
+          cls = v > 10 ? 'bad' : v > 3 ? 'warn' : 'good';
+        }
+        return `<div class="dp-metric"><span class="label">${label}</span><span class="val ${cls}">${val}</span></div>`;
+      }).join('');
+    }
+    renderStats(document.getElementById('dpPi1Stats'), 'pi1');
+    renderStats(document.getElementById('dpPi2Stats'), 'pi2');
+
+    // Pathologies
+    const pathos = report.pathologies || [];
+    const icons = {critical:'🔴', warning:'🟡', info:'🔵'};
+    if (pathos.length === 0) {
+      document.getElementById('dpPathologies').innerHTML =
+        '<div style="padding:16px;text-align:center;font-size:13px;">✅ No cross-correlation issues detected</div>';
+    } else {
+      document.getElementById('dpPathologies').innerHTML = pathos.map(p => `
+        <div class="dp-pathology">
+          <span class="dp-sev">${icons[p.severity]||'•'}</span>
+          <span class="dp-code">${p.code}</span>
+          <div class="dp-desc">${p.description}</div>
+          ${p.detail ? `<div class="dp-detail">${p.detail}</div>` : ''}
+          ${(p.pi1_value || p.pi2_value) ? `
+            <div class="dp-vals">
+              ${p.pi1_value ? `<span class="v1">Pi-1: ${p.pi1_value}</span>` : ''}
+              ${p.pi2_value ? `<span class="v2">Pi-2: ${p.pi2_value}</span>` : ''}
+            </div>` : ''}
+        </div>
+      `).join('');
+    }
+
+    // Slave matrix
+    const matrix = report.slave_matrix || [];
+    const tbody = document.getElementById('dpSlaveBody');
+    if (matrix.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--muted);text-align:center;">No data</td></tr>';
+    } else {
+      tbody.innerHTML = matrix.map(s => {
+        const lossClass = s.loss_pct > 5 ? 'bad' : s.loss_pct > 1 ? 'warn' : 'good';
+        const crc1Class = s.crc_pi1 > 10 ? 'bad' : s.crc_pi1 > 3 ? 'warn' : '';
+        const crc2Class = s.crc_pi2 > 10 ? 'bad' : s.crc_pi2 > 3 ? 'warn' : '';
+        return `<tr>
+          <td style="font-weight:700;">${s.slave_id}</td>
+          <td>${s.frames_pi1}</td>
+          <td>${s.frames_pi2}</td>
+          <td class="${lossClass}" style="font-weight:700;">${s.loss_pct}%</td>
+          <td class="${crc1Class}">${s.crc_pi1}%</td>
+          <td class="${crc2Class}">${s.crc_pi2}%</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // Signal quality map
+    const crc1 = cmp.bad_frame_pct?.pi1 || 0;
+    const crc2 = cmp.bad_frame_pct?.pi2 || 0;
+    const quality1 = Math.max(0, 100 - crc1 * 5); // Scale CRC% to quality
+    const quality2 = Math.max(0, 100 - crc2 * 5);
+    document.getElementById('dpSigPi1').style.width = quality1 + '%';
+    document.getElementById('dpSigPi2').style.width = quality2 + '%';
+    document.getElementById('dpSigPi1Label').textContent = `CRC: ${crc1}% — Signal: ${quality1.toFixed(0)}%`;
+    document.getElementById('dpSigPi2Label').textContent = `CRC: ${crc2}% — Signal: ${quality2.toFixed(0)}%`;
+
+  } catch(e) {
+    document.getElementById('dpPathologies').innerHTML =
+      `<div style="color:var(--red);font-size:12px;">Error loading: ${e.message}</div>`;
+  }
+}
+
+async function saveDualPi() {
+  const url = document.getElementById('dpUrlInput').value.trim();
+  if (!url) return;
+  try {
+    await fetch('/api/correlator/config', {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pi2_url: url, enabled: true})
+    });
+    setTimeout(loadDualPi, 1000);
+  } catch(e) { alert('Error: '+e); }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
