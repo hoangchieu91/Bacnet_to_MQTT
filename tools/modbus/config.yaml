@@ -22,3 +22,10 @@ dual_pi:
   pi2_url: "http://10.25.7.22:8766"   # Pi-2 Modbus RTU Tools URL
   poll_interval_s: 5         # Poll Pi-2 every N seconds
   correlation_window_ms: 50  # Frame matching tolerance (ms)
+
+export:
+  enabled: false             # Set true for offline mode (no network)
+  directory: "/data/modbus_reports"  # JSON output path
+  interval_s: 300            # Export every 5 minutes
+  max_files: 500             # Keep max 500 files (~42 hours)
+  pi_label: ""               # Label (default: hostname)

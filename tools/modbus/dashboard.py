@@ -29,13 +29,15 @@ from fastapi.responses import HTMLResponse, FileResponse
 
 from modbus_sniffer import ModbusSniffer, Pathology
 from modbus_correlator import DualPiCorrelator
+from report_exporter import ReportExporter
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.1.0")
+app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.2.0")
 
 _sniffer: ModbusSniffer | None = None
 _correlator: DualPiCorrelator | None = None
+_exporter: ReportExporter | None = None
 _clients: set[WebSocket] = set()
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -98,11 +100,31 @@ async def startup() -> None:
             logger.error("[Dashboard] Correlator failed to start: %s", exc)
             _correlator = None
 
+    # ── Report Exporter (offline mode) ────────────────────────────────────
+    export_cfg = cfg.get("export", {})
+    if export_cfg.get("enabled", False) and _sniffer:
+        try:
+            _exporter = ReportExporter(
+                get_report=_sniffer.get_report,
+                export_dir=export_cfg.get("directory", "/data/modbus_reports"),
+                interval_s=export_cfg.get("interval_s", 300),
+                max_files=export_cfg.get("max_files", 500),
+                pi_label=export_cfg.get("pi_label", ""),
+            )
+            await _exporter.start()
+            logger.info("[Dashboard] Report Exporter started → %s",
+                        export_cfg.get("directory"))
+        except Exception as exc:
+            logger.error("[Dashboard] Exporter failed to start: %s", exc)
+            _exporter = None
+
     logger.info("[Dashboard] Startup complete")
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
+    if _exporter:
+        await _exporter.stop()
     if _correlator:
         await _correlator.stop()
     if _sniffer:
@@ -182,6 +204,29 @@ async def update_correlator_config(body: dict) -> dict:
 
 
 # ── Serial port detection ─────────────────────────────────────────────────────
+
+@app.get("/api/export/status")
+async def export_status() -> dict:
+    if not _exporter:
+        return {"enabled": False}
+    return _exporter.get_status()
+
+
+@app.get("/api/export/list")
+async def export_list(limit: int = 50) -> list:
+    if not _exporter:
+        return []
+    return _exporter.list_exports(limit)
+
+
+@app.post("/api/export/now")
+async def export_now() -> dict:
+    if not _exporter:
+        raise HTTPException(status_code=400, detail="Exporter not enabled")
+    return _exporter.export_now()
+
+
+# ── Serial port detection (original) ─────────────────────────────────────────
 
 @app.get("/api/serial-ports")
 async def list_serial_ports() -> dict:
