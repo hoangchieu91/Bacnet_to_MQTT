@@ -993,6 +993,300 @@ class BacnetService:
             results[pri] = ok
         return results
 
+    # ── BACnet Tools ───────────────────────────
+    # Phase 1: Device Browser
+
+    # Standard BACnet properties to try reading (superset)
+    _BROWSE_PROPS: list[str] = [
+        # Common to all objects
+        'objectName', 'description', 'presentValue', 'statusFlags',
+        'eventState', 'outOfService', 'reliability',
+        # Analog
+        'units', 'minPresValue', 'maxPresValue', 'resolution',
+        'covIncrement', 'deadband', 'highLimit', 'lowLimit',
+        # Binary
+        'polarity', 'activeText', 'inactiveText',
+        # Multi-state
+        'numberOfStates', 'stateText',
+        # Output/Value
+        'priorityArray', 'relinquishDefault',
+        # Device
+        'systemStatus', 'vendorName', 'vendorIdentifier',
+        'modelName', 'firmwareRevision', 'applicationSoftwareVersion',
+        'protocolVersion', 'protocolRevision', 'protocolServicesSupported',
+        'maxApduLengthAccepted', 'segmentationSupported',
+        'apduTimeout', 'numberOfApduRetries',
+        'databaseRevision', 'maxMaster', 'maxInfoFrames',
+        'objectList',
+        # Network Port object (BACnet Rev 14+)
+        'macAddress', 'networkType', 'networkNumber',
+    ]
+
+    async def read_all_properties(
+        self,
+        address: str,
+        object_type: str,
+        object_instance: int,
+    ) -> dict[str, Any]:
+        """Read ALL standard BACnet properties of an object.
+        Returns dict of property_name→value (skips unsupported/error).
+        """
+        if not self._connected or self._network is None:
+            raise RuntimeError("BACnet service not started")
+
+        ot = _normalize_type(object_type)
+        props: dict[str, Any] = {}
+
+        for prop_name in self._BROWSE_PROPS:
+            try:
+                val = await self._network.read(
+                    f"{address} {ot} {object_instance} {prop_name}"
+                )
+                if val is not None:
+                    val_str = str(val)
+                    if val_str.lower() not in ("none", "null", ""):
+                        # Handle list-like values (stateText, objectList, etc.)
+                        if hasattr(val, '__iter__') and not isinstance(val, str):
+                            try:
+                                props[prop_name] = [str(item) for item in val]
+                            except Exception:
+                                props[prop_name] = val_str
+                        else:
+                            props[prop_name] = val_str
+            except Exception:
+                pass  # Property not supported — skip silently
+
+        return props
+
+    # Phase 2: Property Editor
+
+    async def write_property(
+        self,
+        address: str,
+        object_type: str,
+        object_instance: int,
+        property_name: str,
+        value: Any,
+        priority: int | None = None,
+    ) -> tuple[bool, str]:
+        """Write to ANY writable BACnet property.
+        Unlike write_object() which only writes presentValue, this can write
+        objectName, description, covIncrement, maxMaster, etc.
+        """
+        if not self._connected or self._network is None:
+            return False, "BACnet service not started"
+
+        try:
+            ot = _normalize_type(object_type)
+            write_val = value
+
+            # Build request string
+            if priority and property_name.lower() == 'presentvalue':
+                request_str = f"{address} {ot} {object_instance} {property_name} {write_val} - {priority}"
+            else:
+                request_str = f"{address} {ot} {object_instance} {property_name} {write_val}"
+
+            logger.info("WriteProperty: %s", request_str)
+            response = await self._network._write(request_str)
+            logger.info("WriteProperty response: %s", response)
+            return True, ""
+        except Exception as exc:
+            err_msg = str(exc)
+            logger.error("WriteProperty failed: %s — %s", request_str, err_msg)
+            if 'writeAccessDenied' in err_msg or 'readOnly' in err_msg.lower():
+                return False, "Write Access Denied — property is read-only"
+            if 'unknownProperty' in err_msg:
+                return False, f"Unknown property: {property_name}"
+            if 'invalidDataType' in err_msg:
+                return False, f"Invalid value '{value}' for {property_name}"
+            if 'NoResponseFromController' in err_msg:
+                return False, "No response from device"
+            return False, err_msg
+
+    # Phase 3: Device Management
+
+    async def reinitialize_device(
+        self,
+        address: str,
+        device_id: int,
+        state: str = "warmstart",
+        password: str | None = None,
+    ) -> tuple[bool, str]:
+        """Send ReinitializeDevice service request.
+        state: 'coldstart' or 'warmstart'
+        """
+        if not self._connected or self._network is None:
+            return False, "BACnet service not started"
+
+        try:
+            from bacpypes3.apdu import ReinitializeDeviceRequest
+            from bacpypes3.primitivedata import CharacterString
+            from bacpypes3.constructeddata import ReinitializedStateOfDevice
+
+            req = ReinitializeDeviceRequest()
+            req.reinitializedStateOfDevice = (
+                ReinitializedStateOfDevice.coldstart if state == 'coldstart'
+                else ReinitializedStateOfDevice.warmstart
+            )
+            if password:
+                req.password = CharacterString(password)
+
+            # Use BAC0's internal mechanism to send the request
+            logger.info("ReinitializeDevice %s (%d) → %s", address, device_id, state)
+
+            # Fallback: use write to trigger reinitialize via BAC0 high-level
+            # BAC0 doesn't directly expose ReinitializeDevice, so we use the
+            # lower-level BACpypes3 app if available
+            app = getattr(self._network, 'this_application', None)
+            if app is None:
+                # Try via BAC0's internal app reference
+                app = getattr(self._network, 'app', None)
+
+            if app:
+                from bacpypes3.pdu import Address
+                req.pduDestination = Address(address)
+                response = await app.request(req)
+                logger.info("ReinitializeDevice response: %s", response)
+                return True, f"Device {device_id} {state} requested"
+            else:
+                return False, "Cannot access BACnet application layer"
+
+        except ImportError:
+            # Fallback without bacpypes3 direct access
+            logger.warning("bacpypes3 not available for ReinitializeDevice, using write workaround")
+            return False, "ReinitializeDevice requires bacpypes3 direct access"
+        except Exception as exc:
+            err_msg = str(exc)
+            logger.error("ReinitializeDevice failed: %s", err_msg)
+            return False, err_msg
+
+    async def device_communication_control(
+        self,
+        address: str,
+        device_id: int,
+        state: str = "enable",
+        duration: int | None = None,
+        password: str | None = None,
+    ) -> tuple[bool, str]:
+        """Send DeviceCommunicationControl service request.
+        state: 'enable' or 'disable'
+        duration: minutes (None = permanent)
+        """
+        if not self._connected or self._network is None:
+            return False, "BACnet service not started"
+
+        try:
+            from bacpypes3.apdu import DeviceCommunicationControlRequest
+
+            req = DeviceCommunicationControlRequest()
+            if state == 'disable':
+                req.enableDisable = 1  # disable
+            else:
+                req.enableDisable = 0  # enable
+
+            if duration is not None:
+                req.timeDuration = duration
+            if password:
+                from bacpypes3.primitivedata import CharacterString
+                req.password = CharacterString(password)
+
+            app = getattr(self._network, 'this_application', None) or getattr(self._network, 'app', None)
+            if app:
+                from bacpypes3.pdu import Address
+                req.pduDestination = Address(address)
+                response = await app.request(req)
+                logger.info("DeviceCommunicationControl → %s: %s", address, response)
+                return True, f"Device {device_id} communication {state}d"
+            else:
+                return False, "Cannot access BACnet application layer"
+
+        except ImportError:
+            return False, "DeviceCommunicationControl requires bacpypes3 direct access"
+        except Exception as exc:
+            return False, str(exc)
+
+    async def time_synchronization(
+        self,
+        address: str | None = None,
+    ) -> tuple[bool, str]:
+        """Send TimeSynchronization (broadcast or unicast).
+        address=None → global broadcast to all devices.
+        """
+        if not self._connected or self._network is None:
+            return False, "BACnet service not started"
+
+        try:
+            import datetime
+            from bacpypes3.apdu import TimeSynchronizationRequest
+            from bacpypes3.basetypes import DateTime as BACnetDateTime
+            from bacpypes3.primitivedata import Date, Time
+
+            now = datetime.datetime.now()
+            req = TimeSynchronizationRequest()
+            req.time = BACnetDateTime(
+                date=Date((now.year - 1900, now.month, now.day, now.isoweekday() % 7)),
+                time=Time((now.hour, now.minute, now.second, 0))
+            )
+
+            app = getattr(self._network, 'this_application', None) or getattr(self._network, 'app', None)
+            if app:
+                if address:
+                    from bacpypes3.pdu import Address
+                    req.pduDestination = Address(address)
+                else:
+                    from bacpypes3.pdu import GlobalBroadcast
+                    req.pduDestination = GlobalBroadcast()
+
+                await app.request(req)
+                target = address or "all devices (broadcast)"
+                logger.info("TimeSynchronization sent to %s at %s", target, now.isoformat())
+                return True, f"Time synced to {now.strftime('%H:%M:%S')} → {target}"
+            else:
+                return False, "Cannot access BACnet application layer"
+
+        except ImportError:
+            return False, "TimeSynchronization requires bacpypes3 direct access"
+        except Exception as exc:
+            return False, str(exc)
+
+    # Phase 4: Network Diagnostics
+
+    async def whois_range(
+        self,
+        low_limit: int = 0,
+        high_limit: int = 4194303,
+    ) -> list[dict[str, Any]]:
+        """Extended Who-Is with device ID range filter.
+        Returns list of discovered devices with details.
+        """
+        if not self._connected or self._network is None:
+            raise RuntimeError("BACnet service not started")
+
+        results: list[dict[str, Any]] = []
+        try:
+            logger.info("Who-Is scan range %d–%d", low_limit, high_limit)
+            devices = await self._network.discover(
+                limits=(low_limit, high_limit),
+                global_broadcast=True
+            )
+            if devices:
+                for dev_id, addr in devices.items() if isinstance(devices, dict) else []:
+                    info: dict[str, Any] = {
+                        'device_id': dev_id,
+                        'address': str(addr),
+                    }
+                    # Try reading device name
+                    try:
+                        name = await self._network.read(f"{addr} device {dev_id} objectName")
+                        info['name'] = str(name) if name else '—'
+                    except Exception:
+                        info['name'] = '—'
+                    results.append(info)
+        except Exception as exc:
+            logger.error("Who-Is scan failed: %s", exc)
+
+        return results
+
     # ── helpers ────────────────────────────────
     def get_device(self, device_id: int) -> BacnetDevice | None:
         return self._devices.get(device_id)
@@ -1004,3 +1298,4 @@ class BacnetService:
     @property
     def discovered_devices(self) -> list[BacnetDevice]:
         return list(self._devices.values())
+

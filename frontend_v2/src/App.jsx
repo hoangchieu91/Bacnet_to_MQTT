@@ -14,6 +14,7 @@ import { AnomalyPage } from './components/AnomalyPage';
 import { LoginPage } from './components/LoginPage';
 import { ToastContainer } from './components/ToastContainer';
 import { ExportPage } from './components/ExportPage';
+import { BacnetToolsPage } from './components/BacnetToolsPage';
 import {
   LayoutDashboard, Activity, Replace, Eye, TrendingUp, Settings,
   Cable, Users, FileText, Clock, AlertTriangle, Download, Menu, X,
@@ -204,6 +205,7 @@ function App() {
           {page === 'anomaly'        && <AnomalyPage />}
           {page === 'settings'       && <SettingsPage />}
           {page === 'export'         && <ExportPage />}
+          {page === 'bacnet-tools'   && <BacnetToolsPage />}
         </main>
 
         {/* ── Mobile Bottom Navigation Bar ── */}

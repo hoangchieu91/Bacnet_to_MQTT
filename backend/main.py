@@ -1830,3 +1830,146 @@ logging.getLogger().addHandler(_buf_handler)
 @app.get("/api/logs")
 async def get_logs(lines: int = 100):
     return {"logs": _log_buffer[-lines:]}
+
+
+# ── BACnet Tools API ──────────────────────────────────────────────────────────
+
+@app.get("/api/tools/devices/{device_id}/objects")
+async def tools_get_objects(device_id: int):
+    """Get object list for a device (Phase 1: Device Browser)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+    addr = bacnet_service.get_device_address(device_id)
+    if not addr:
+        return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+    try:
+        objects = await bacnet_service.read_object_list(addr, device_id)
+        return {
+            "device_id": device_id,
+            "address": addr,
+            "objects": [
+                {"type": o.object_type, "instance": o.object_instance, "name": o.object_name}
+                for o in objects
+            ],
+            "count": len(objects),
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, 500)
+
+
+@app.get("/api/tools/devices/{device_id}/objects/{object_type}/{object_instance}/properties")
+async def tools_get_properties(device_id: int, object_type: str, object_instance: int):
+    """Read ALL standard properties of an object (Phase 1: Device Browser)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+    addr = bacnet_service.get_device_address(device_id)
+    if not addr:
+        return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+    try:
+        props = await bacnet_service.read_all_properties(addr, object_type, object_instance)
+        return {
+            "device_id": device_id,
+            "object_type": object_type,
+            "object_instance": object_instance,
+            "properties": props,
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, 500)
+
+
+@app.post("/api/tools/write-property")
+async def tools_write_property(body: dict):
+    """Write to ANY writable BACnet property (Phase 2: Property Editor)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+
+    device_id = body.get("device_id")
+    object_type = body.get("object_type")
+    instance = body.get("object_instance")
+    prop = body.get("property")
+    value = body.get("value")
+    priority = body.get("priority")
+
+    if not all([device_id, object_type, instance is not None, prop, value is not None]):
+        return JSONResponse({"error": "Missing required fields"}, 400)
+
+    addr = bacnet_service.get_device_address(device_id)
+    if not addr:
+        return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+
+    ok, msg = await bacnet_service.write_property(
+        addr, object_type, instance, prop, value, priority
+    )
+    return {"success": ok, "message": msg}
+
+
+@app.post("/api/tools/reinitialize")
+async def tools_reinitialize(body: dict):
+    """ReinitializeDevice service (Phase 3: Device Management)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+
+    device_id = body.get("device_id")
+    state = body.get("state", "warmstart")
+    password = body.get("password")
+
+    addr = bacnet_service.get_device_address(device_id)
+    if not addr:
+        return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+
+    ok, msg = await bacnet_service.reinitialize_device(addr, device_id, state, password)
+    return {"success": ok, "message": msg}
+
+
+@app.post("/api/tools/comm-control")
+async def tools_comm_control(body: dict):
+    """DeviceCommunicationControl service (Phase 3)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+
+    device_id = body.get("device_id")
+    state = body.get("state", "enable")
+    duration = body.get("duration")
+    password = body.get("password")
+
+    addr = bacnet_service.get_device_address(device_id)
+    if not addr:
+        return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+
+    ok, msg = await bacnet_service.device_communication_control(
+        addr, device_id, state, duration, password
+    )
+    return {"success": ok, "message": msg}
+
+
+@app.post("/api/tools/time-sync")
+async def tools_time_sync(body: dict = {}):
+    """TimeSynchronization service (Phase 3)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+
+    device_id = body.get("device_id")
+    address = None
+    if device_id:
+        address = bacnet_service.get_device_address(device_id)
+        if not address:
+            return JSONResponse({"error": f"Device {device_id} not found"}, 404)
+
+    ok, msg = await bacnet_service.time_synchronization(address)
+    return {"success": ok, "message": msg}
+
+
+@app.post("/api/tools/whois")
+async def tools_whois(body: dict = {}):
+    """Extended Who-Is scan with range (Phase 4: Network Diagnostics)."""
+    if not bacnet_service or not bacnet_service.connected:
+        return JSONResponse({"error": "BACnet not connected"}, 503)
+
+    low = body.get("low_limit", 0)
+    high = body.get("high_limit", 4194303)
+
+    try:
+        results = await bacnet_service.whois_range(low, high)
+        return {"devices": results, "count": len(results)}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, 500)

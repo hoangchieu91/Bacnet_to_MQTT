@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard, Activity, Cable, Replace, Users, Eye, TrendingUp,
   FileText, Clock, Settings, Zap, AlertTriangle, Download,
-  ChevronRight, ChevronLeft,
+  ChevronRight, ChevronLeft, Wrench,
 } from 'lucide-react';
 
 const API = '/api';
@@ -27,6 +27,9 @@ const NAV = [
   ]},
   { group: 'CONFIG', items: [
     { page: 'settings', label: 'Settings', icon: Settings },
+  ]},
+  { group: 'TOOLS', items: [
+    { page: 'bacnet-tools', label: 'BACnet Tools', icon: Wrench },
   ]},
 ];
 
