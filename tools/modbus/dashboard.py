@@ -30,14 +30,16 @@ from fastapi.responses import HTMLResponse, FileResponse
 from modbus_sniffer import ModbusSniffer, Pathology
 from modbus_correlator import DualPiCorrelator
 from report_exporter import ReportExporter
+from modbus_scanner import ModbusScanner
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.2.0")
+app = FastAPI(title="Modbus RTU Tools Dashboard", version="1.3.0")
 
 _sniffer: ModbusSniffer | None = None
 _correlator: DualPiCorrelator | None = None
 _exporter: ReportExporter | None = None
+_scanner: ModbusScanner | None = None
 _clients: set[WebSocket] = set()
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -288,6 +290,79 @@ async def decode_frame(body: dict) -> dict:
         "byte_order": byte_order,
         "registers": result,
     }
+
+
+# ── Scanner API ───────────────────────────────────────────────────────────────
+
+def _get_scanner() -> ModbusScanner:
+    """Get or create scanner with config.yaml settings."""
+    global _scanner
+    if _scanner:
+        return _scanner
+    cfg = yaml.safe_load(open(Path(__file__).parent / "config.yaml"))
+    serial_cfg = cfg.get("serial", {})
+    _scanner = ModbusScanner(
+        port=serial_cfg.get("port", "/dev/ttyUSB0"),
+        baudrate=serial_cfg.get("baudrate", 9600),
+        timeout_ms=serial_cfg.get("scanner_timeout_ms", 500),
+        parity=serial_cfg.get("parity", "N"),
+        stopbits=serial_cfg.get("stopbits", 1),
+    )
+    return _scanner
+
+
+@app.post("/api/scanner/read")
+async def scanner_read(body: dict) -> dict:
+    """Read registers: {slave, fc, start, count, byte_order}"""
+    scanner = _get_scanner()
+    slave = body.get("slave", 1)
+    fc = body.get("fc", 3)
+    start = body.get("start", 0)
+    count = body.get("count", 10)
+    byte_order = body.get("byte_order", "AB_CD")
+
+    result = await scanner.read_registers(slave, fc, start, count, byte_order)
+    return {
+        "slave_id": result.slave_id,
+        "fc": result.fc,
+        "start_reg": result.start_reg,
+        "registers": result.registers,
+        "raw_values": result.raw_values,
+        "error": result.error,
+        "response_ms": round(result.response_ms, 1),
+    }
+
+
+@app.post("/api/scanner/scan-slaves")
+async def scanner_scan_slaves(body: dict) -> dict:
+    """Scan for active slave IDs: {fc, test_reg, start_id, end_id}"""
+    scanner = _get_scanner()
+    fc = body.get("fc", 3)
+    test_reg = body.get("test_reg", 0)
+    start_id = body.get("start_id", 1)
+    end_id = min(body.get("end_id", 247), 247)
+
+    found = await scanner.scan_slaves(fc, test_reg, start_id, end_id)
+    return {
+        "range": {"start": start_id, "end": end_id},
+        "found": found,
+        "count": len(found),
+    }
+
+
+@app.post("/api/scanner/scan-registers")
+async def scanner_scan_registers(body: dict) -> dict:
+    """Scan register range: {slave, fc, start, end, block_size, byte_order}"""
+    scanner = _get_scanner()
+    slave = body.get("slave", 1)
+    fc = body.get("fc", 3)
+    start = body.get("start", 0)
+    end = body.get("end", 99)
+    block_size = min(body.get("block_size", 10), 125)
+    byte_order = body.get("byte_order", "AB_CD")
+
+    result = await scanner.scan_registers(slave, fc, start, end, block_size, byte_order)
+    return result
 
 
 # ── Dual-Pi Correlator API ────────────────────────────────────────────────────

@@ -160,6 +160,24 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .dec-btn:hover{filter:brightness(1.1);}
 .dec-btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
 .dec-btn.secondary:hover{border-color:var(--accent);}
+
+/* ── Scanner page ─────────────────────────── */
+.scan-toolbar{display:flex;gap:8px;align-items:center;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;flex-wrap:wrap;}
+.scan-toolbar label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;}
+.scan-toolbar select,.scan-toolbar input[type=number]{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:4px;font-size:12px;font-family:monospace;width:70px;}
+.scan-toolbar select{width:auto;min-width:90px;}
+.scan-progress{height:6px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-bottom:12px;}
+.scan-progress-bar{height:100%;background:linear-gradient(90deg,var(--accent),var(--green));transition:width .3s;width:0;}
+.scan-status{padding:10px 14px;font-size:12px;color:var(--muted);background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;}
+.scan-status.running{color:var(--accent);border-color:var(--accent);}
+.scan-status.done{color:var(--green);border-color:var(--green);}
+.scan-status.error{color:var(--red);border-color:var(--red);}
+.scan-ranges{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0;}
+.scan-range-tag{padding:4px 10px;border-radius:4px;font-size:11px;font-family:monospace;font-weight:600;background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3);}
+.scan-slave-found{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px;font-family:monospace;align-items:center;}
+.scan-slave-found .badge{padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;}
+.scan-slave-found .badge.online{background:rgba(34,197,94,.15);color:var(--green);}
+.scan-slave-found .badge.offline{background:rgba(239,68,68,.15);color:var(--red);}
 .dec-frame-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;font-size:12px;}
 .dec-frame-info .dec-field{display:flex;flex-direction:column;gap:2px;}
 .dec-frame-info .dec-field span:first-child{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
@@ -252,6 +270,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="tab" onclick="showTab('config')">⚙️ Config</div>
   <div class="tab" onclick="showTab('dualpi')">🔗 Dual-Pi</div>
   <div class="tab" onclick="showTab('decoder')">🔎 Decoder</div>
+  <div class="tab" onclick="showTab('scanner')">📡 Scanner</div>
   <div class="tab" onclick="showTab('about')">📖 About</div>
 </div>
 
@@ -574,6 +593,63 @@ python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
   </div>
 </div>
 
+<!-- ══════════ TAB: SCANNER ══════════ -->
+<div class="page" id="page-scanner">
+  <!-- Toolbar -->
+  <div class="scan-toolbar">
+    <label>Mode:</label>
+    <select id="scan-mode">
+      <option value="read">📚 Read Registers</option>
+      <option value="scan-reg">🔍 Scan Register Range</option>
+      <option value="scan-slave">📡 Scan Slave IDs</option>
+    </select>
+    <label>Slave:</label>
+    <input type="number" id="scan-slave" value="1" min="1" max="247">
+    <label>FC:</label>
+    <select id="scan-fc">
+      <option value="3">FC=03 (Holding)</option>
+      <option value="4">FC=04 (Input)</option>
+    </select>
+    <label>Start:</label>
+    <input type="number" id="scan-start" value="0" min="0" max="65535">
+    <label>Count:</label>
+    <input type="number" id="scan-count" value="10" min="1" max="125">
+    <label>Order:</label>
+    <select id="scan-byte-order">
+      <option value="AB_CD">AB CD</option>
+      <option value="CD_AB">CD AB</option>
+      <option value="BA_DC">BA DC</option>
+      <option value="DC_BA">DC BA</option>
+    </select>
+    <button class="dec-btn" onclick="scanExecute()" id="scan-go-btn">🚀 Go!</button>
+  </div>
+
+  <!-- Warning -->
+  <div style="padding:8px 14px;font-size:11px;color:var(--yellow);background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:var(--radius);margin-bottom:12px;">
+    ⚠️ Scanner gửi dữ liệu ra bus (active mode). Chỉ dùng khi Pi kết nối trực tiếp với thiết bị, KHÔNG dùng khi có master khác đang poll.
+  </div>
+
+  <!-- Progress -->
+  <div class="scan-progress" id="scan-progress" style="display:none;"><div class="scan-progress-bar" id="scan-progress-bar"></div></div>
+
+  <!-- Status -->
+  <div class="scan-status" id="scan-status" style="display:none;"></div>
+
+  <!-- Valid Ranges (shown after scan-registers) -->
+  <div id="scan-ranges-box" style="display:none;">
+    <h4 style="font-size:12px;color:var(--muted);margin-bottom:8px;">✅ VALID REGISTER RANGES</h4>
+    <div class="scan-ranges" id="scan-ranges"></div>
+  </div>
+
+  <!-- Results -->
+  <div class="card" style="overflow-x:auto;margin-top:10px;">
+    <h3 id="scan-result-title">📊 RESULTS</h3>
+    <div id="scan-result-body">
+      <div style="text-align:center;color:var(--muted);padding:40px;">Chọn mode và nhấn 🚀 Go!</div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════ TAB: ABOUT ══════════ -->
 <div class="page" id="page-about">
   <div class="about-hero">
@@ -828,7 +904,7 @@ async function checkNavStatus() {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const ids=['health','frames','config','dualpi','decoder','about'];
+    const ids=['health','frames','config','dualpi','decoder','scanner','about'];
     t.classList.toggle('active', ids[i]===name);
   });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1164,6 +1240,165 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.key === 'Enter') decodeHex();
   });
 });
+
+// ── Scanner ───────────────────────────────────────────────────────────────────
+
+let scanRunning = false;
+
+function scanSetStatus(text, cls) {
+  const el = document.getElementById('scan-status');
+  el.style.display = 'block';
+  el.textContent = text;
+  el.className = 'scan-status ' + (cls || '');
+}
+
+function scanSetProgress(pct) {
+  const bar = document.getElementById('scan-progress');
+  bar.style.display = pct >= 0 ? 'block' : 'none';
+  document.getElementById('scan-progress-bar').style.width = pct + '%';
+}
+
+async function scanExecute() {
+  if (scanRunning) return;
+  const mode = document.getElementById('scan-mode').value;
+  const slave = parseInt(document.getElementById('scan-slave').value) || 1;
+  const fc = parseInt(document.getElementById('scan-fc').value) || 3;
+  const start = parseInt(document.getElementById('scan-start').value) || 0;
+  const count = parseInt(document.getElementById('scan-count').value) || 10;
+  const byteOrder = document.getElementById('scan-byte-order').value;
+
+  scanRunning = true;
+  document.getElementById('scan-go-btn').disabled = true;
+  document.getElementById('scan-ranges-box').style.display = 'none';
+  scanSetProgress(0);
+
+  try {
+    if (mode === 'read') {
+      scanSetStatus(`📚 Reading slave ${slave}, FC=${fc}, regs ${start}-${start+count-1}...`, 'running');
+      const data = await fetch('/api/scanner/read', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({slave, fc, start, count, byte_order: byteOrder})
+      }).then(r => r.json());
+      scanSetProgress(100);
+
+      if (data.error) {
+        scanSetStatus(`❌ ${data.error} (${data.response_ms}ms)`, 'error');
+        document.getElementById('scan-result-body').innerHTML =
+          `<div style="padding:20px;color:var(--red);">${data.error}</div>`;
+      } else {
+        scanSetStatus(`✅ Read ${data.registers.length} registers (${data.response_ms}ms)`, 'done');
+        renderScanRegisters(data.registers, 'REGISTER VALUES');
+      }
+
+    } else if (mode === 'scan-reg') {
+      const endReg = start + count - 1;
+      scanSetStatus(`🔍 Scanning slave ${slave}, regs ${start}-${endReg}...`, 'running');
+      const data = await fetch('/api/scanner/scan-registers', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({slave, fc, start, end: endReg, block_size: 10, byte_order: byteOrder})
+      }).then(r => r.json());
+      scanSetProgress(100);
+
+      scanSetStatus(`✅ Found ${data.total_valid} valid registers in ${data.valid_ranges.length} range(s)`, 'done');
+
+      // Show valid ranges
+      if (data.valid_ranges.length > 0) {
+        const rangesBox = document.getElementById('scan-ranges-box');
+        rangesBox.style.display = 'block';
+        document.getElementById('scan-ranges').innerHTML = data.valid_ranges.map(r =>
+          `<span class="scan-range-tag">${r.start} — ${r.end} (${r.end - r.start + 1} regs)</span>`
+        ).join('');
+      }
+
+      renderScanRegisters(data.registers, `SCAN RESULTS — ${data.total_valid} registers found`);
+
+    } else if (mode === 'scan-slave') {
+      const startId = parseInt(document.getElementById('scan-start').value) || 1;
+      const endId = parseInt(document.getElementById('scan-count').value) || 247;
+      scanSetStatus(`📡 Scanning slave IDs ${startId}-${endId}...`, 'running');
+      const data = await fetch('/api/scanner/scan-slaves', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({fc, test_reg: 0, start_id: startId, end_id: endId})
+      }).then(r => r.json());
+      scanSetProgress(100);
+
+      scanSetStatus(`✅ Found ${data.count} devices (range ${data.range.start}-${data.range.end})`, 'done');
+      renderScanSlaves(data.found);
+    }
+
+  } catch (e) {
+    scanSetStatus(`❌ Error: ${e.message}`, 'error');
+  }
+
+  scanRunning = false;
+  document.getElementById('scan-go-btn').disabled = false;
+}
+
+function renderScanRegisters(registers, title) {
+  document.getElementById('scan-result-title').textContent = '📊 ' + title;
+  if (!registers || registers.length === 0) {
+    document.getElementById('scan-result-body').innerHTML =
+      '<div style="padding:20px;text-align:center;color:var(--muted);">Không có register data</div>';
+    return;
+  }
+
+  function fmt(v) {
+    if (v === undefined || v === null) return '—';
+    if (typeof v === 'number' && !isFinite(v)) return v > 0 ? '+Inf' : '-Inf';
+    if (typeof v === 'number' && (Math.abs(v) > 1e10 || (Math.abs(v) < 1e-6 && v !== 0)))
+      return v.toExponential(3);
+    return v;
+  }
+
+  let html = `<table class="dec-table"><thead><tr>
+    <th>Reg</th><th>Hex</th><th>UINT16</th><th>INT16</th>
+    <th>UINT32</th><th>INT32</th><th>Float32</th><th>F32 Inv</th><th>Float64</th>
+  </tr></thead><tbody>`;
+
+  registers.forEach(r => {
+    html += `<tr>
+      <td class="col-reg">${r.reg}</td>
+      <td class="col-hex">${r.raw_hex}</td>
+      <td class="col-uint16">${r.uint16}</td>
+      <td class="col-int16">${r.int16}</td>
+      <td class="col-uint32">${fmt(r.uint32)}</td>
+      <td class="col-int32">${fmt(r.int32)}</td>
+      <td class="col-float">${fmt(r.float32)}</td>
+      <td class="col-float-inv">${fmt(r.float32_inv)}</td>
+      <td class="col-float64">${fmt(r.float64)}</td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  document.getElementById('scan-result-body').innerHTML = html;
+}
+
+function renderScanSlaves(found) {
+  document.getElementById('scan-result-title').textContent = `📡 FOUND ${found.length} DEVICES`;
+  if (found.length === 0) {
+    document.getElementById('scan-result-body').innerHTML =
+      '<div style="padding:20px;text-align:center;color:var(--muted);">Không tìm thấy thiết bị nào</div>';
+    return;
+  }
+  let html = found.map(s => `
+    <div class="scan-slave-found">
+      <span class="badge online">ONLINE</span>
+      <span style="color:var(--accent);font-weight:700;width:80px;">Slave ${s.slave_id}</span>
+      <span style="color:var(--muted);">${s.response_ms}ms</span>
+      <span style="color:var(--green);">Reg[0] = ${s.value !== null ? s.value : '—'}</span>
+      <button class="dec-btn secondary" style="margin-left:auto;padding:3px 10px;font-size:10px;"
+        onclick="scanReadSlave(${s.slave_id})">📚 Read</button>
+    </div>
+  `).join('');
+  document.getElementById('scan-result-body').innerHTML = html;
+}
+
+function scanReadSlave(slaveId) {
+  document.getElementById('scan-slave').value = slaveId;
+  document.getElementById('scan-mode').value = 'read';
+  document.getElementById('scan-start').value = '0';
+  document.getElementById('scan-count').value = '20';
+  scanExecute();
+}
 
 // ── Dual-Pi ───────────────────────────────────────────────────────────────────
 async function loadDualPi() {
