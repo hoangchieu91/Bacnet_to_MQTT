@@ -164,10 +164,12 @@ async def sniffer_pathologies() -> list[dict]:
 
 @app.post("/api/decode")
 async def decode_frame(body: dict) -> dict:
-    """Decode raw hex bytes into register values.
+    """Decode raw hex bytes into register values — Modbus Poll compatible.
+
+    Supports: UINT16, INT16, UINT32, INT32, Float32, Float32 Inv,
+              Double Inv 32, Float64, with 4 byte order modes.
 
     Input: {"hex": "0103040001006484A3", "byte_order": "AB_CD"}
-    Output: register values in multiple formats
     """
     import struct as _struct
 
@@ -186,12 +188,11 @@ async def decode_frame(body: dict) -> dict:
     fc = raw[1]
     is_response = fc in (0x03, 0x04) and len(raw) > 3
 
-    # For read response: byte 2 = byte count, then register data
     if is_response:
         byte_count = raw[2]
         reg_data = raw[3:3+byte_count]
     else:
-        reg_data = raw[2:]  # Just use everything after slave/fc
+        reg_data = raw[2:]
 
     # Parse into 16-bit registers
     registers = []
@@ -199,7 +200,33 @@ async def decode_frame(body: dict) -> dict:
         hi, lo = reg_data[i], reg_data[i+1]
         registers.append((hi << 8) | lo)
 
-    # Build multi-format decode table
+    # ── Helper: apply byte order to 2 registers → 32-bit integer ──
+    def _make_u32(r0, r1, order):
+        if order == "AB_CD":
+            return (r0 << 16) | r1
+        elif order == "CD_AB":
+            return (r1 << 16) | r0
+        elif order == "BA_DC":
+            return (((r0 & 0xFF) << 8 | (r0 >> 8)) << 16) | \
+                   ((r1 & 0xFF) << 8 | (r1 >> 8))
+        elif order == "DC_BA":
+            return (((r1 & 0xFF) << 8 | (r1 >> 8)) << 16) | \
+                   ((r0 & 0xFF) << 8 | (r0 >> 8))
+        return (r0 << 16) | r1
+
+    def _to_float32(u32):
+        try:
+            return round(_struct.unpack(">f", _struct.pack(">I", u32))[0], 6)
+        except Exception:
+            return None
+
+    def _to_float64(u64):
+        try:
+            return round(_struct.unpack(">d", _struct.pack(">Q", u64))[0], 10)
+        except Exception:
+            return None
+
+    # ── Build multi-format decode table ───────────────────────────────────
     result = []
     for idx, val in enumerate(registers):
         entry = {
@@ -210,36 +237,46 @@ async def decode_frame(body: dict) -> dict:
             "binary": f"{val:016b}",
         }
 
-        # 32-bit values (need 2 consecutive registers)
+        # ── 32-bit values (2 consecutive registers) ──
         if idx < len(registers) - 1:
             r0, r1 = registers[idx], registers[idx+1]
 
-            # AB CD (Big Endian)
-            if byte_order == "AB_CD":
-                u32 = (r0 << 16) | r1
-            # CD AB (Little Endian word swap)
-            elif byte_order == "CD_AB":
-                u32 = (r1 << 16) | r0
-            # BA DC (Byte swap)
-            elif byte_order == "BA_DC":
-                u32 = (((r0 & 0xFF) << 8 | (r0 >> 8)) << 16) | \
-                      ((r1 & 0xFF) << 8 | (r1 >> 8))
-            # DC BA (Little Endian)
-            elif byte_order == "DC_BA":
-                u32 = (((r1 & 0xFF) << 8 | (r1 >> 8)) << 16) | \
-                      ((r0 & 0xFF) << 8 | (r0 >> 8))
-            else:
-                u32 = (r0 << 16) | r1
-
+            u32 = _make_u32(r0, r1, byte_order)
             entry["uint32"] = u32
             entry["int32"] = u32 if u32 < 0x80000000 else u32 - 0x100000000
 
-            # Float32
-            try:
-                packed = _struct.pack(">I", u32)
-                entry["float32"] = round(_struct.unpack(">f", packed)[0], 6)
-            except Exception:
-                entry["float32"] = None
+            # Float32 (normal byte order)
+            entry["float32"] = _to_float32(u32)
+
+            # Float32 Inverted (word-swapped: swap r0/r1 then decode)
+            u32_inv = _make_u32(r1, r0, byte_order)
+            entry["float32_inv"] = _to_float32(u32_inv)
+
+            # Double Inverted 32 (byte-swapped within each word)
+            r0_bs = ((r0 & 0xFF) << 8) | (r0 >> 8)
+            r1_bs = ((r1 & 0xFF) << 8) | (r1 >> 8)
+            u32_dinv = _make_u32(r0_bs, r1_bs, byte_order)
+            entry["double_inv32"] = _to_float32(u32_dinv)
+
+        # ── 64-bit values / Float64 (4 consecutive registers) ──
+        if idx < len(registers) - 3:
+            r0, r1, r2, r3 = registers[idx:idx+4]
+            if byte_order == "AB_CD":
+                u64 = (r0 << 48) | (r1 << 32) | (r2 << 16) | r3
+            elif byte_order == "CD_AB":
+                u64 = (r3 << 48) | (r2 << 32) | (r1 << 16) | r0
+            elif byte_order == "BA_DC":
+                def bs(r): return ((r & 0xFF) << 8) | (r >> 8)
+                u64 = (bs(r0) << 48) | (bs(r1) << 32) | (bs(r2) << 16) | bs(r3)
+            elif byte_order == "DC_BA":
+                def bs(r): return ((r & 0xFF) << 8) | (r >> 8)
+                u64 = (bs(r3) << 48) | (bs(r2) << 32) | (bs(r1) << 16) | bs(r0)
+            else:
+                u64 = (r0 << 48) | (r1 << 32) | (r2 << 16) | r3
+
+            entry["uint64"] = u64
+            entry["int64"] = u64 if u64 < 0x8000000000000000 else u64 - 0x10000000000000000
+            entry["float64"] = _to_float64(u64)
 
         result.append(entry)
 

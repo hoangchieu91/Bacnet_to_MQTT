@@ -175,6 +175,9 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .dec-table .col-uint32{color:var(--orange);}
 .dec-table .col-int32{color:var(--yellow);}
 .dec-table .col-float{color:#ec4899;font-weight:600;}
+.dec-table .col-float-inv{color:#f472b6;}
+.dec-table .col-dbl-inv{color:#fb923c;}
+.dec-table .col-float64{color:#c084fc;font-weight:600;}
 .dec-table .col-bin{color:var(--muted);font-size:10px;letter-spacing:.5px;}
 .dec-raw-hex{padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;font-family:monospace;font-size:12px;line-height:2;}
 .dec-raw-hex .byte{display:inline-block;padding:2px 4px;margin:1px;border-radius:3px;}
@@ -550,11 +553,14 @@ python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
           <th>Unsigned 32</th>
           <th>Signed 32</th>
           <th>Float 32</th>
+          <th>F32 Inv</th>
+          <th>Dbl Inv32</th>
+          <th>Float 64</th>
           <th>Binary</th>
         </tr>
       </thead>
       <tbody id="dec-reg-body">
-        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">Nhập hex hoặc chọn frame từ danh sách bên dưới</td></tr>
+        <tr><td colspan="11" style="text-align:center;color:var(--muted);padding:40px;">Nhập hex hoặc chọn frame từ danh sách bên dưới</td></tr>
       </tbody>
     </table>
   </div>
@@ -1090,13 +1096,18 @@ function renderDecodeResult(data, hexInput) {
   // Register table
   const tbody = document.getElementById('dec-reg-body');
   if (!data.registers || data.registers.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;">Không có register data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:var(--muted);padding:20px;">Không có register data</td></tr>';
     return;
   }
+
+  function fmtFloat(v) {
+    if (v === undefined || v === null) return '—';
+    if (!isFinite(v)) return v > 0 ? '+Inf' : '-Inf';
+    if (Math.abs(v) > 1e10 || (Math.abs(v) < 1e-6 && v !== 0)) return v.toExponential(3);
+    return v;
+  }
+
   tbody.innerHTML = data.registers.map(r => {
-    const f32 = r.float32 !== undefined && r.float32 !== null ?
-      (Math.abs(r.float32) > 1e10 || (Math.abs(r.float32) < 1e-6 && r.float32 !== 0) ?
-        r.float32.toExponential(3) : r.float32) : '—';
     return `<tr>
       <td class="col-reg">${r.reg}</td>
       <td class="col-hex">${r.raw_hex}</td>
@@ -1104,7 +1115,10 @@ function renderDecodeResult(data, hexInput) {
       <td class="col-int16">${r.int16}</td>
       <td class="col-uint32">${r.uint32 !== undefined ? r.uint32 : '—'}</td>
       <td class="col-int32">${r.int32 !== undefined ? r.int32 : '—'}</td>
-      <td class="col-float">${f32}</td>
+      <td class="col-float">${fmtFloat(r.float32)}</td>
+      <td class="col-float-inv">${fmtFloat(r.float32_inv)}</td>
+      <td class="col-dbl-inv">${fmtFloat(r.double_inv32)}</td>
+      <td class="col-float64">${fmtFloat(r.float64)}</td>
       <td class="col-bin">${r.binary}</td>
     </tr>`;
   }).join('');
