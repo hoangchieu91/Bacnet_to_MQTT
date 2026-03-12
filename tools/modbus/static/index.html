@@ -150,6 +150,47 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .diag-body h5{font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px;}
 .diag-body p{font-size:11px;color:var(--muted);line-height:1.5;}
 
+/* ── Decoder page ──────────────────────────── */
+.dec-toolbar{display:flex;gap:10px;align-items:center;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;flex-wrap:wrap;}
+.dec-toolbar label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+.dec-toolbar select,.dec-toolbar input[type=text]{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:4px;font-size:12px;font-family:monospace;}
+.dec-toolbar input[type=text]{flex:1;min-width:200px;}
+.dec-toolbar select{min-width:100px;}
+.dec-btn{background:linear-gradient(135deg,var(--accent),#d97706);border:none;color:#000;font-weight:700;font-size:12px;padding:6px 16px;border-radius:4px;cursor:pointer;}
+.dec-btn:hover{filter:brightness(1.1);}
+.dec-btn.secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border);}
+.dec-btn.secondary:hover{border-color:var(--accent);}
+.dec-frame-info{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;font-size:12px;}
+.dec-frame-info .dec-field{display:flex;flex-direction:column;gap:2px;}
+.dec-frame-info .dec-field span:first-child{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+.dec-frame-info .dec-field span:last-child{font-weight:600;font-family:monospace;}
+.dec-table{width:100%;border-collapse:collapse;font-size:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;}
+.dec-table th{background:var(--surface2);padding:8px 10px;text-align:left;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);border-bottom:1px solid var(--border);position:sticky;top:0;}
+.dec-table td{padding:6px 10px;border-top:1px solid var(--border);font-family:monospace;font-size:12px;}
+.dec-table tr:hover td{background:var(--surface2);}
+.dec-table .col-reg{color:var(--accent);font-weight:700;width:50px;}
+.dec-table .col-hex{color:var(--purple);}
+.dec-table .col-uint16{color:var(--green);}
+.dec-table .col-int16{color:var(--blue);}
+.dec-table .col-uint32{color:var(--orange);}
+.dec-table .col-int32{color:var(--yellow);}
+.dec-table .col-float{color:#ec4899;font-weight:600;}
+.dec-table .col-bin{color:var(--muted);font-size:10px;letter-spacing:.5px;}
+.dec-raw-hex{padding:14px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:16px;font-family:monospace;font-size:12px;line-height:2;}
+.dec-raw-hex .byte{display:inline-block;padding:2px 4px;margin:1px;border-radius:3px;}
+.dec-raw-hex .byte.slave{background:#8b5cf6;color:#fff;}
+.dec-raw-hex .byte.fc{background:#3b82f6;color:#fff;}
+.dec-raw-hex .byte.count{background:#f59e0b;color:#000;}
+.dec-raw-hex .byte.data{background:var(--surface2);color:var(--green);}
+.dec-raw-hex .byte.crc{background:#ef4444;color:#fff;}
+.dec-recent{max-height:200px;overflow-y:auto;}
+.dec-recent-item{display:flex;gap:8px;padding:6px 10px;font-size:11px;font-family:monospace;cursor:pointer;border-bottom:1px solid var(--border);transition:.15s;}
+.dec-recent-item:hover{background:var(--surface2);}
+.dec-recent-item .ts{color:var(--muted);width:70px;flex-shrink:0;}
+.dec-recent-item .slave{color:var(--accent);width:35px;}
+.dec-recent-item .func{color:var(--blue);width:130px;}
+.dec-recent-item .hex{color:var(--green);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
 /* ── Dual-Pi page ──────────────────────────── */
 .dp-conn{display:flex;align-items:center;gap:12px;padding:14px 18px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);margin-bottom:16px;}
 .dp-conn .dp-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
@@ -207,6 +248,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="tab" onclick="showTab('frames')">📋 Frame Log</div>
   <div class="tab" onclick="showTab('config')">⚙️ Config</div>
   <div class="tab" onclick="showTab('dualpi')">🔗 Dual-Pi</div>
+  <div class="tab" onclick="showTab('decoder')">🔎 Decoder</div>
   <div class="tab" onclick="showTab('about')">📖 About</div>
 </div>
 
@@ -466,6 +508,66 @@ python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
   </div>
 </div>
 
+<!-- ══════════ TAB: DECODER ══════════ -->
+<div class="page" id="page-decoder">
+  <!-- Toolbar -->
+  <div class="dec-toolbar">
+    <label>Hex Input:</label>
+    <input type="text" id="dec-hex-input" placeholder="Paste hex: 01 03 04 00 01 00 64 ..." spellcheck="false">
+    <label>Byte Order:</label>
+    <select id="dec-byte-order">
+      <option value="AB_CD">AB CD (Big Endian)</option>
+      <option value="CD_AB">CD AB (Word Swap)</option>
+      <option value="BA_DC">BA DC (Byte Swap)</option>
+      <option value="DC_BA">DC BA (Little Endian)</option>
+    </select>
+    <button class="dec-btn" onclick="decodeHex()">🔍 Decode</button>
+    <button class="dec-btn secondary" onclick="decodeLatest()">📡 Latest Frame</button>
+  </div>
+
+  <!-- Frame Info -->
+  <div class="dec-frame-info" id="dec-frame-info" style="display:none;">
+    <div class="dec-field"><span>Slave ID</span><span id="dec-slave">—</span></div>
+    <div class="dec-field"><span>Function</span><span id="dec-func">—</span></div>
+    <div class="dec-field"><span>Byte Count</span><span id="dec-bytecount">—</span></div>
+    <div class="dec-field"><span>Registers</span><span id="dec-regcount">—</span></div>
+    <div class="dec-field"><span>Byte Order</span><span id="dec-order">—</span></div>
+  </div>
+
+  <!-- Raw Hex Breakdown -->
+  <div class="dec-raw-hex" id="dec-raw-view" style="display:none;"></div>
+
+  <!-- Register Table -->
+  <div class="card" style="overflow-x:auto;">
+    <h3>📊 REGISTER VALUES</h3>
+    <table class="dec-table" id="dec-reg-table">
+      <thead>
+        <tr>
+          <th>Reg #</th>
+          <th>Hex</th>
+          <th>Unsigned 16</th>
+          <th>Signed 16</th>
+          <th>Unsigned 32</th>
+          <th>Signed 32</th>
+          <th>Float 32</th>
+          <th>Binary</th>
+        </tr>
+      </thead>
+      <tbody id="dec-reg-body">
+        <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:40px;">Nhập hex hoặc chọn frame từ danh sách bên dưới</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Recent Response Frames -->
+  <div class="card" style="margin-top:16px;">
+    <h3>📋 RECENT RESPONSE FRAMES <span style="font-weight:400;color:var(--muted);font-size:11px;">(Click to decode)</span></h3>
+    <div class="dec-recent" id="dec-recent-list">
+      <div style="text-align:center;color:var(--muted);padding:20px;">Loading...</div>
+    </div>
+  </div>
+</div>
+
 <!-- ══════════ TAB: ABOUT ══════════ -->
 <div class="page" id="page-about">
   <div class="about-hero">
@@ -720,7 +822,7 @@ async function checkNavStatus() {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const ids=['health','frames','config','dualpi','about'];
+    const ids=['health','frames','config','dualpi','decoder','about'];
     t.classList.toggle('active', ids[i]===name);
   });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -729,6 +831,7 @@ function showTab(name) {
   if (name==='frames') loadFrames();
   if (name==='config') loadStatus();
   if (name==='dualpi') loadDualPi();
+  if (name==='decoder') loadDecoderFrames();
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -893,6 +996,160 @@ async function detectPorts() {
     }
   } catch(e) { document.getElementById('portList').textContent = 'Error: '+e; }
 }
+
+// ── Register Decoder ──────────────────────────────────────────────────────────
+
+const FC_NAMES = {
+  1:'Read Coils', 2:'Read Discrete Inputs', 3:'Read Holding Registers',
+  4:'Read Input Registers', 5:'Write Single Coil', 6:'Write Single Register',
+  15:'Write Multiple Coils', 16:'Write Multiple Registers'
+};
+
+let lastDecodeHex = '';
+
+async function decodeHex() {
+  const hexInput = document.getElementById('dec-hex-input').value.trim();
+  if (!hexInput) return;
+  lastDecodeHex = hexInput;
+  const byteOrder = document.getElementById('dec-byte-order').value;
+  try {
+    const result = await fetch('/api/decode', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({hex: hexInput.replace(/\s+/g,''), byte_order: byteOrder})
+    }).then(r => r.json());
+    renderDecodeResult(result, hexInput);
+  } catch (e) {
+    console.error('Decode error:', e);
+  }
+}
+
+async function decodeLatest() {
+  try {
+    const frames = await fetch('/api/sniffer/frames?limit=200').then(r => r.json());
+    const responses = frames.filter(f => !f.is_req && !f.is_exc && f.raw_hex && (f.fc===3||f.fc===4));
+    if (responses.length === 0) {
+      alert('Chưa có frame response nào (FC=03/04)');
+      return;
+    }
+    const latest = responses[responses.length - 1];
+    document.getElementById('dec-hex-input').value = latest.raw_hex;
+    lastDecodeHex = latest.raw_hex;
+    decodeHex();
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function decodeFromFrame(hexStr) {
+  document.getElementById('dec-hex-input').value = hexStr;
+  lastDecodeHex = hexStr;
+  decodeHex();
+}
+
+async function loadDecoderFrames() {
+  try {
+    const frames = await fetch('/api/sniffer/frames?limit=200').then(r => r.json());
+    const responses = frames.filter(f => !f.is_req && !f.is_exc && f.raw_hex).reverse();
+    const list = document.getElementById('dec-recent-list');
+    if (responses.length === 0) {
+      list.innerHTML = '<div style="text-align:center;color:var(--muted);padding:20px;">Chưa có response frame</div>';
+      return;
+    }
+    list.innerHTML = responses.slice(0, 50).map(f => {
+      const ts = new Date(f.ts * 1000).toLocaleTimeString();
+      return `<div class="dec-recent-item" onclick="decodeFromFrame('${f.raw_hex}')">
+        <span class="ts">${ts}</span>
+        <span class="slave">S${f.slave}</span>
+        <span class="func">${f.func}</span>
+        <span class="hex">${f.raw_hex.match(/.{2}/g).join(' ').toUpperCase()}</span>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function renderDecodeResult(data, hexInput) {
+  if (data.error) return;
+
+  // Frame info
+  const info = document.getElementById('dec-frame-info');
+  info.style.display = 'grid';
+  document.getElementById('dec-slave').textContent = data.slave_id;
+  document.getElementById('dec-func').textContent =
+    (FC_NAMES[data.function_code] || 'FC=0x'+data.function_code.toString(16).toUpperCase()) +
+    ' (0x' + data.function_code.toString(16).toUpperCase().padStart(2,'0') + ')';
+  document.getElementById('dec-bytecount').textContent = data.byte_count + ' bytes';
+  document.getElementById('dec-regcount').textContent = data.register_count;
+  document.getElementById('dec-order').textContent = data.byte_order.replace('_',' ');
+
+  // Raw hex view with color coding
+  buildRawHexView(hexInput.replace(/\s+/g,''), data);
+
+  // Register table
+  const tbody = document.getElementById('dec-reg-body');
+  if (!data.registers || data.registers.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:20px;">Không có register data</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.registers.map(r => {
+    const f32 = r.float32 !== undefined && r.float32 !== null ?
+      (Math.abs(r.float32) > 1e10 || (Math.abs(r.float32) < 1e-6 && r.float32 !== 0) ?
+        r.float32.toExponential(3) : r.float32) : '—';
+    return `<tr>
+      <td class="col-reg">${r.reg}</td>
+      <td class="col-hex">${r.raw_hex}</td>
+      <td class="col-uint16">${r.uint16}</td>
+      <td class="col-int16">${r.int16}</td>
+      <td class="col-uint32">${r.uint32 !== undefined ? r.uint32 : '—'}</td>
+      <td class="col-int32">${r.int32 !== undefined ? r.int32 : '—'}</td>
+      <td class="col-float">${f32}</td>
+      <td class="col-bin">${r.binary}</td>
+    </tr>`;
+  }).join('');
+}
+
+function buildRawHexView(hexStr, data) {
+  const rawView = document.getElementById('dec-raw-view');
+  rawView.style.display = 'block';
+  const bytes = hexStr.match(/.{2}/g) || [];
+  if (bytes.length < 3) { rawView.innerHTML = ''; return; }
+
+  let html = '<b style="font-size:10px;color:var(--muted);">FRAME STRUCTURE:</b><br>';
+  const fc = parseInt(bytes[1], 16);
+  const isReadResp = (fc === 3 || fc === 4) && bytes.length > 3;
+
+  bytes.forEach((b, i) => {
+    let cls = 'data';
+    let title = '';
+    if (i === 0) { cls = 'slave'; title = 'Slave ID'; }
+    else if (i === 1) { cls = 'fc'; title = 'Function Code'; }
+    else if (i === 2 && isReadResp) { cls = 'count'; title = 'Byte Count'; }
+    else if (i >= bytes.length - 2) { cls = 'crc'; title = 'CRC'; }
+    else { title = `Data byte ${i-2}`; }
+    html += `<span class="byte ${cls}" title="${title}">${b.toUpperCase()}</span>`;
+  });
+
+  html += '<br><span style="font-size:10px;color:var(--muted);">';
+  html += '<span class="byte slave" style="font-size:10px;">SLV</span> ';
+  html += '<span class="byte fc" style="font-size:10px;">FC</span> ';
+  if (isReadResp) html += '<span class="byte count" style="font-size:10px;">CNT</span> ';
+  html += '<span class="byte data" style="font-size:10px;">DATA</span> ';
+  html += '<span class="byte crc" style="font-size:10px;">CRC</span>';
+  html += '</span>';
+  rawView.innerHTML = html;
+}
+
+// Re-decode when byte order changes
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('dec-byte-order').addEventListener('change', () => {
+    if (lastDecodeHex) decodeHex();
+  });
+  document.getElementById('dec-hex-input').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') decodeHex();
+  });
+});
 
 // ── Dual-Pi ───────────────────────────────────────────────────────────────────
 async function loadDualPi() {

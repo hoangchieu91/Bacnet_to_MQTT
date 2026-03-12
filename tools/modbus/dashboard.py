@@ -162,6 +162,97 @@ async def sniffer_pathologies() -> list[dict]:
     return report.get("pathologies", [])
 
 
+@app.post("/api/decode")
+async def decode_frame(body: dict) -> dict:
+    """Decode raw hex bytes into register values.
+
+    Input: {"hex": "0103040001006484A3", "byte_order": "AB_CD"}
+    Output: register values in multiple formats
+    """
+    import struct as _struct
+
+    raw_hex = body.get("hex", "")
+    byte_order = body.get("byte_order", "AB_CD")
+
+    try:
+        raw = bytes.fromhex(raw_hex.replace(" ", ""))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid hex string")
+
+    if len(raw) < 3:
+        return {"error": "Too short", "registers": []}
+
+    slave_id = raw[0]
+    fc = raw[1]
+    is_response = fc in (0x03, 0x04) and len(raw) > 3
+
+    # For read response: byte 2 = byte count, then register data
+    if is_response:
+        byte_count = raw[2]
+        reg_data = raw[3:3+byte_count]
+    else:
+        reg_data = raw[2:]  # Just use everything after slave/fc
+
+    # Parse into 16-bit registers
+    registers = []
+    for i in range(0, len(reg_data) - 1, 2):
+        hi, lo = reg_data[i], reg_data[i+1]
+        registers.append((hi << 8) | lo)
+
+    # Build multi-format decode table
+    result = []
+    for idx, val in enumerate(registers):
+        entry = {
+            "reg": idx,
+            "raw_hex": f"{val:04X}",
+            "uint16": val,
+            "int16": val if val < 0x8000 else val - 0x10000,
+            "binary": f"{val:016b}",
+        }
+
+        # 32-bit values (need 2 consecutive registers)
+        if idx < len(registers) - 1:
+            r0, r1 = registers[idx], registers[idx+1]
+
+            # AB CD (Big Endian)
+            if byte_order == "AB_CD":
+                u32 = (r0 << 16) | r1
+            # CD AB (Little Endian word swap)
+            elif byte_order == "CD_AB":
+                u32 = (r1 << 16) | r0
+            # BA DC (Byte swap)
+            elif byte_order == "BA_DC":
+                u32 = (((r0 & 0xFF) << 8 | (r0 >> 8)) << 16) | \
+                      ((r1 & 0xFF) << 8 | (r1 >> 8))
+            # DC BA (Little Endian)
+            elif byte_order == "DC_BA":
+                u32 = (((r1 & 0xFF) << 8 | (r1 >> 8)) << 16) | \
+                      ((r0 & 0xFF) << 8 | (r0 >> 8))
+            else:
+                u32 = (r0 << 16) | r1
+
+            entry["uint32"] = u32
+            entry["int32"] = u32 if u32 < 0x80000000 else u32 - 0x100000000
+
+            # Float32
+            try:
+                packed = _struct.pack(">I", u32)
+                entry["float32"] = round(_struct.unpack(">f", packed)[0], 6)
+            except Exception:
+                entry["float32"] = None
+
+        result.append(entry)
+
+    return {
+        "slave_id": slave_id,
+        "function_code": fc,
+        "byte_count": len(reg_data),
+        "register_count": len(registers),
+        "byte_order": byte_order,
+        "registers": result,
+    }
+
+
 # ── Dual-Pi Correlator API ────────────────────────────────────────────────────
 
 @app.get("/api/correlator/status")

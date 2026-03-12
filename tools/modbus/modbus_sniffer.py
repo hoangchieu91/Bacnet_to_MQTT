@@ -723,6 +723,8 @@ class ModbusSniffer:
 
     def _handle_frame(self, frame: ModbusFrame) -> None:
         self.analyzer.ingest_frame(frame)
+        # Reconstruct raw bytes for decoder
+        raw_bytes = bytes([frame.slave_id, frame.function_code]) + frame.data
         log_entry = {
             "ts":       round(frame.ts, 4),
             "slave":    frame.slave_id,
@@ -733,6 +735,8 @@ class ModbusSniffer:
             "is_req":   frame.is_request,
             "is_exc":   frame.is_exception,
             "exc_name": frame.exception_name if frame.is_exception else "",
+            "raw_hex":  raw_bytes.hex(),
+            "data_hex": frame.data.hex(),
         }
         self.frame_log.append(log_entry)
         if len(self.frame_log) > 500:
