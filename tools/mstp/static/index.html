@@ -133,6 +133,34 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .util-ring-label{position:absolute;inset:0;display:flex;flex-direction:column;
   align-items:center;justify-content:center;font-size:14px;font-weight:800;}
 .util-ring-sub{font-size:9px;color:var(--muted);margin-top:1px;}
+
+/* ── About page ──────────────────────────── */
+.about-hero{text-align:center;padding:40px 20px 30px;}
+.about-hero h2{font-size:1.6rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#a855f7);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;}
+.about-hero p{color:var(--muted);font-size:13px;max-width:600px;margin:0 auto;line-height:1.6;}
+.about-section{margin-bottom:24px;}
+.about-section h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.about-section h3 .sec-icon{font-size:20px;}
+.about-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;}
+.about-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:border-color .3s;}
+.about-card:hover{border-color:var(--accent);}
+.about-card h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:10px;}
+.about-card p,.about-card li{font-size:12px;color:#b0bbd0;line-height:1.7;}
+.about-card ul{padding-left:16px;}
+.about-card code{background:#0a0d14;color:var(--accent);padding:1px 6px;border-radius:3px;font-size:11px;}
+.about-card .mono-block{background:#0a0d14;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:monospace;font-size:11px;line-height:1.7;color:#94a3b8;overflow-x:auto;margin:8px 0;white-space:pre;}
+.wire-diagram{background:#0a0d14;border:1px solid var(--border);border-radius:8px;padding:16px;font-family:monospace;font-size:11px;line-height:1.6;color:#94a3b8;overflow-x:auto;white-space:pre;}
+.frame-viz{display:flex;gap:2px;margin:10px 0;flex-wrap:wrap;}
+.frame-byte{padding:6px 10px;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;text-align:center;}
+.frame-byte.pre{background:#2d1b69;color:#a855f7;}
+.frame-byte.hdr{background:#1e3a5f;color:var(--accent);}
+.frame-byte.data{background:var(--surface2);color:var(--text);}
+.frame-byte.crc{background:#14532d;color:var(--green);}
+.feat-icon{font-size:24px;margin-bottom:8px;display:block;}
+.cmp-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+.cmp-tbl th{text-align:left;padding:8px 10px;background:var(--surface2);color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
+.cmp-tbl td{padding:7px 10px;border-top:1px solid var(--border);}
+.cmp-tbl tr:hover td{background:#1a2136;}
 </style>
 </head>
 <body>
@@ -157,6 +185,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="tab" onclick="showTab('sniffer')">📡 Bus Health</div>
   <div class="tab" onclick="showTab('filetransfer')">📤 File Transfer</div>
   <div class="tab" onclick="showTab('config')">⚙️ Network Config</div>
+  <div class="tab" onclick="showTab('about')">📖 About</div>
 </div>
 
 <!-- ══════════ TAB: MONITOR ══════════ -->
@@ -441,6 +470,161 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   </div>
 </div>
 
+<!-- ══════════ TAB: ABOUT ══════════ -->
+<div class="page" id="page-about">
+  <div class="about-hero">
+    <h2>🔌 MS/TP Tools — Giới thiệu kỹ thuật</h2>
+    <p>Bộ công cụ chẩn đoán mạng BACnet MS/TP. Hỗ trợ giám sát node, sniffer bus health, truyền file, và cấu hình mạng từ xa.</p>
+  </div>
+
+  <!-- BACnet MS/TP Overview -->
+  <div class="about-section">
+    <h3><span class="sec-icon">⚡</span> BACnet MS/TP là gì?</h3>
+    <div class="about-grid">
+      <div class="about-card">
+        <h4>Token Passing Protocol</h4>
+        <p>MS/TP (Master-Slave/Token-Passing) chạy trên <strong>RS-485</strong>. Các node tham gia <strong>vòng token ring</strong>: ai giữ token mới được phép gửi frame.</p>
+        <div class="mono-block">Token Ring:
+  Node 1 ──token──→ Node 5 ──token──→ Node 12 ─→ ...
+     ↑                                              │
+     └──────────────── token ←──────────────────────┘
+
+  Mỗi node giữ token → gửi 1+ frame → pass token → ...</div>
+        <ul style="margin-top:8px">
+          <li><strong>Master nodes</strong> (0-127): tham gia vòng token, poll slaves</li>
+          <li><strong>Slave nodes</strong> (0-254): chỉ trả lời khi được hỏi</li>
+          <li>Baud rate tiêu chuẩn: <code>9600</code>, <code>19200</code>, <code>38400</code>, <code>76800</code></li>
+        </ul>
+      </div>
+      <div class="about-card">
+        <h4>Frame Format</h4>
+        <p>Khác Modbus RTU, MS/TP có <strong>preamble rõ ràng</strong>: <code>0x55 0xFF</code>.</p>
+        <div class="frame-viz">
+          <div class="frame-byte pre">0x55<br><span style='font-size:9px'>Preamble</span></div>
+          <div class="frame-byte pre">0xFF<br><span style='font-size:9px'>Preamble</span></div>
+          <div class="frame-byte hdr">Type<br><span style='font-size:9px'>1 byte</span></div>
+          <div class="frame-byte hdr">Dst<br><span style='font-size:9px'>1 byte</span></div>
+          <div class="frame-byte hdr">Src<br><span style='font-size:9px'>1 byte</span></div>
+          <div class="frame-byte hdr">Len<br><span style='font-size:9px'>2 bytes</span></div>
+          <div class="frame-byte crc">CRC8<br><span style='font-size:9px'>Header</span></div>
+          <div class="frame-byte data">Data<br><span style='font-size:9px'>0-1497 B</span></div>
+          <div class="frame-byte crc">CRC16<br><span style='font-size:9px'>Data</span></div>
+        </div>
+        <table class="cmp-tbl" style="margin-top:10px">
+          <tr><th>Frame Type</th><th>Value</th><th>Mô tả</th></tr>
+          <tr><td>Token</td><td><code>0x00</code></td><td>Chuyển quyền phát trong vòng ring</td></tr>
+          <tr><td>Poll For Master</td><td><code>0x01</code></td><td>Tìm node mới trên bus</td></tr>
+          <tr><td>Reply To PFM</td><td><code>0x02</code></td><td>Trả lời có mặt trên bus</td></tr>
+          <tr><td>Test Request</td><td><code>0x03</code></td><td>Kiểm tra kết nối</td></tr>
+          <tr><td>BACnet Data (no reply)</td><td><code>0x05</code></td><td>Gửi dữ liệu, không cần trả lời</td></tr>
+          <tr><td>BACnet Data (expect reply)</td><td><code>0x06</code></td><td>Gửi dữ liệu, chờ trả lời</td></tr>
+          <tr><td>Reply Postponed</td><td><code>0x07</code></td><td>Sẽ trả lời sau</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Features -->
+  <div class="about-section">
+    <h3><span class="sec-icon">🛠️</span> Các tính năng</h3>
+    <div class="about-grid" style="grid-template-columns:repeat(auto-fit,minmax(250px,1fr))">
+      <div class="about-card">
+        <span class="feat-icon">🔬</span>
+        <h4>Node Monitor</h4>
+        <p>Quét bus tìm tất cả node (0-127). Hiển thị grid trạng thái: <span style="color:var(--green)">■ Online</span>, <span style="color:var(--red)">■ Offline</span>, <span style="color:var(--muted)">■ Unknown</span>.</p>
+        <p style="margin-top:6px">Click vào node xem chi tiết: Object Name, Vendor, Model, Firmware, Location.</p>
+      </div>
+      <div class="about-card">
+        <span class="feat-icon">📡</span>
+        <h4>Bus Health Sniffer</h4>
+        <p>Passive sniffer bắt mọi frame trên bus MS/TP. Phân tích:</p>
+        <ul>
+          <li>Token rotation time</li>
+          <li>Frame rate per node</li>
+          <li>CRC errors (CRC8 header + CRC16 data)</li>
+          <li>Bus utilization %</li>
+          <li>Pathology detection (silence, collision, junk)</li>
+        </ul>
+      </div>
+      <div class="about-card">
+        <span class="feat-icon">📤</span>
+        <h4>File Transfer</h4>
+        <p>Upload/Download file qua BACnet <code>AtomicWriteFile</code> / <code>AtomicReadFile</code>. Hỗ trợ thiết bị CPO-RL4, CPO-PC6A.</p>
+        <ul>
+          <li>Chọn file từ danh sách File Objects trên device</li>
+          <li>Upload firmware, config, schedule</li>
+          <li>Download backup, log</li>
+        </ul>
+      </div>
+      <div class="about-card">
+        <span class="feat-icon">⚙️</span>
+        <h4>Network Config</h4>
+        <p>Cấu hình thông số mạng MS/TP cho Pi:</p>
+        <ul>
+          <li>Serial port (<code>/dev/ttyUSB0</code>)</li>
+          <li>Baud rate (9600-76800)</li>
+          <li>Node address (0-127)</li>
+          <li>Max Masters, Max Info Frames</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- So sánh với Modbus -->
+  <div class="about-section">
+    <h3><span class="sec-icon">📊</span> So sánh MS/TP vs Modbus RTU</h3>
+    <div class="about-card">
+      <div style="overflow-x:auto">
+        <table class="cmp-tbl">
+          <thead><tr>
+            <th>Tiêu chí</th><th style="text-align:center">BACnet MS/TP</th><th style="text-align:center">Modbus RTU</th>
+          </tr></thead>
+          <tbody>
+            <tr><td><strong>Tầng vật lý</strong></td><td style="text-align:center">RS-485</td><td style="text-align:center">RS-485</td></tr>
+            <tr><td><strong>Topology</strong></td><td style="text-align:center">Token Ring (peer-to-peer)</td><td style="text-align:center">Master-Slave</td></tr>
+            <tr><td><strong>Frame delimiter</strong></td><td style="text-align:center"><code>0x55 0xFF</code> preamble</td><td style="text-align:center">Silence (3.5T gap)</td></tr>
+            <tr><td><strong>CRC</strong></td><td style="text-align:center">CRC-8 (header) + CRC-16 (data)</td><td style="text-align:center">CRC-16 (toàn frame)</td></tr>
+            <tr><td><strong>Max nodes</strong></td><td style="text-align:center">128 masters + 127 slaves</td><td style="text-align:center">247 slaves</td></tr>
+            <tr><td><strong>Data model</strong></td><td style="text-align:center">Objects (AV, BV, AI, BI...)</td><td style="text-align:center">Registers (Holding, Input...)</td></tr>
+            <tr><td><strong>Application</strong></td><td style="text-align:center">HVAC, Building Automation</td><td style="text-align:center">Industrial, Energy Metering</td></tr>
+            <tr><td><strong>Max frame size</strong></td><td style="text-align:center">1505 bytes</td><td style="text-align:center">256 bytes</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hardware Setup -->
+  <div class="about-section">
+    <h3><span class="sec-icon">🔧</span> Kết nối phần cứng</h3>
+    <div class="about-card">
+      <div class="wire-diagram">┌──────────────────────────────────────────────────────┐
+│                  Raspberry Pi 5                      │
+│                                                      │
+│   USB Port 1                                         │
+│   ┌──────────┐                                       │
+│   │ USB-RS485│   modbus_sniffer.py / mstp_sniffer.py │
+│   │ (CH340)  │   dashboard.py :8765                  │
+│   │/ttyUSB0  │                                       │
+│   └────┬─────┘                                       │
+└────────┼─────────────────────────────────────────────┘
+         │
+    ┌────┴────────────────────────────────────────────┐
+    │  MS/TP Bus (RS-485)                             │
+    │                                                 │
+    │  [120Ω] ─── Node 1 ─── Node 5 ─── Node 12 ─── [120Ω]  │
+    │              (BACnet controller)                │
+    └─────────────────────────────────────────────────┘</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:30px;color:var(--muted);font-size:11px;border-top:1px solid var(--border);margin-top:20px">
+    <p>MS/TP Tools Dashboard — Built with ❤️ for Building Automation</p>
+    <p style="margin-top:4px">BACnet MS/TP / Token Ring / Node Discovery / File Transfer / Bus Health</p>
+  </div>
+</div>
+
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = { nodes:{}, selected:null };
@@ -449,7 +633,7 @@ let ws = null;
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i)=>{
-    const ids=['monitor','sniffer','filetransfer','config'];
+    const ids=['monitor','sniffer','filetransfer','config','about'];
     t.classList.toggle('active', ids[i]===name);
   });
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));

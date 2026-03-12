@@ -110,6 +110,45 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   background:#14532d;color:var(--green);}
 .badge-exc{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;
   background:#450a0a;color:var(--red);}
+
+/* ── About page ──────────────────────────── */
+.about-hero{text-align:center;padding:40px 20px 30px;}
+.about-hero h2{font-size:1.6rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#f97316);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;}
+.about-hero p{color:var(--muted);font-size:13px;max-width:600px;margin:0 auto;line-height:1.6;}
+.about-section{margin-bottom:24px;}
+.about-section h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
+.about-section h3 .sec-icon{font-size:20px;}
+.about-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;}
+.about-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;transition:border-color .3s;}
+.about-card:hover{border-color:var(--accent);}
+.about-card h4{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);margin-bottom:10px;}
+.about-card p,.about-card li{font-size:12px;color:#b0bbd0;line-height:1.7;}
+.about-card ul{padding-left:16px;}
+.about-card code{background:#0a0d14;color:var(--accent);padding:1px 6px;border-radius:3px;font-size:11px;}
+.about-card .mono-block{background:#0a0d14;border:1px solid var(--border);border-radius:6px;padding:12px;font-family:monospace;font-size:11px;line-height:1.7;color:#94a3b8;overflow-x:auto;margin:8px 0;white-space:pre;}
+.mode-badge{display:inline-block;font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;margin-right:6px;}
+.mode-1{background:#1e3a5f;color:var(--blue);}
+.mode-2{background:#2c1a00;color:var(--accent);}
+.mode-3{background:#1a0a2e;color:var(--purple);}
+.cmp-tbl{width:100%;border-collapse:collapse;font-size:11px;}
+.cmp-tbl th{text-align:left;padding:8px 10px;background:var(--surface2);color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
+.cmp-tbl td{padding:7px 10px;border-top:1px solid var(--border);}
+.cmp-tbl tr:hover td{background:#1a2136;}
+.cmp-tbl .check{color:var(--green);font-weight:700;}
+.cmp-tbl .cross{color:#475569;}
+.cmp-tbl .warn{color:var(--yellow);}
+.frame-viz{display:flex;gap:2px;margin:10px 0;flex-wrap:wrap;}
+.frame-byte{width:auto;padding:6px 10px;border-radius:4px;font-family:monospace;font-size:11px;font-weight:700;text-align:center;}
+.frame-byte.slave{background:#1e3a5f;color:var(--blue);}
+.frame-byte.fc{background:#14532d;color:var(--green);}
+.frame-byte.data{background:var(--surface2);color:var(--text);}
+.frame-byte.crc{background:#2c1a00;color:var(--accent);}
+.wire-diagram{background:#0a0d14;border:1px solid var(--border);border-radius:8px;padding:16px;font-family:monospace;font-size:11px;line-height:1.6;color:#94a3b8;overflow-x:auto;white-space:pre;}
+.diag-rule{display:flex;gap:12px;padding:12px;border-radius:6px;border:1px solid var(--border);margin-bottom:8px;align-items:flex-start;}
+.diag-rule:hover{background:var(--surface2);}
+.diag-num{min-width:28px;height:28px;background:var(--surface2);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:var(--accent);}
+.diag-body h5{font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px;}
+.diag-body p{font-size:11px;color:var(--muted);line-height:1.5;}
 </style>
 </head>
 <body>
@@ -131,6 +170,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="tab active" onclick="showTab('health')">📡 Bus Health</div>
   <div class="tab" onclick="showTab('frames')">📋 Frame Log</div>
   <div class="tab" onclick="showTab('config')">⚙️ Config</div>
+  <div class="tab" onclick="showTab('about')">📖 About</div>
 </div>
 
 <!-- ══════════ TAB: BUS HEALTH ══════════ -->
@@ -294,6 +334,230 @@ python3 modbus_sniffer.py --baud 9600 --json > report.json</code>
   </div>
 </div>
 
+<!-- ══════════ TAB: ABOUT ══════════ -->
+<div class="page" id="page-about">
+  <div class="about-hero">
+    <h2>📟 Modbus RTU Sniffer & Diagnostics</h2>
+    <p>Công cụ chẩn đoán bus Modbus RTU từ tầng vật lý đến ứng dụng. Hỗ trợ 3 mode hoạt động với tổng cộng 23 loại chẩn đoán.</p>
+  </div>
+
+  <!-- RS-485 Physical -->
+  <div class="about-section">
+    <h3><span class="sec-icon">⚡</span> Tầng vật lý: RS-485</h3>
+    <div class="about-grid">
+      <div class="about-card">
+        <h4>Differential Pair</h4>
+        <p>RS-485 dùng 2 dây <code>A(+)</code> và <code>B(-)</code> truyền vi sai. Nhiễu common-mode bị triệt tiêu nhờ receiver đo hiệu V<sub>A</sub> − V<sub>B</sub>.</p>
+        <div class="mono-block">Không nhiễu:      Có nhiễu (+2V):
+  A = 3.5V          A = 5.5V
+  B = 1.5V          B = 3.5V
+  ΔV = 2.0V         ΔV = 2.0V ← giống!</div>
+      </div>
+      <div class="about-card">
+        <h4>Half-Duplex & Master-Slave</h4>
+        <p>Một thời điểm chỉ 1 thiết bị truyền. Master bắt đầu giao tiếp, Slave chỉ trả lời khi được hỏi.</p>
+        <ul>
+          <li>Bus collision xảy ra khi 2 device TX cùng lúc → CRC fail</li>
+          <li>Cần <code>120Ω</code> termination ở 2 đầu bus chống phản xạ sóng</li>
+          <li>Tối đa 32 unit loads, bus max 1200m @9600 baud</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modbus RTU Frame -->
+  <div class="about-section">
+    <h3><span class="sec-icon">📦</span> Modbus RTU Frame</h3>
+    <div class="about-card">
+      <h4>Cấu trúc Frame (ADU)</h4>
+      <p style="margin-bottom:8px">Modbus RTU <strong>không có delimiter</strong> — frame bắt đầu/kết thúc bằng khoảng im lặng ≥ 3.5 character times.</p>
+      <div class="frame-viz">
+        <div class="frame-byte slave">Slave ID<br><span style='font-size:9px'>1 byte</span></div>
+        <div class="frame-byte fc">Function<br><span style='font-size:9px'>1 byte</span></div>
+        <div class="frame-byte data">Data<br><span style='font-size:9px'>0-252 bytes</span></div>
+        <div class="frame-byte crc">CRC-16<br><span style='font-size:9px'>2 bytes (LSB)</span></div>
+      </div>
+      <p style="margin-top:8px;font-size:11px;color:var(--muted)">Ví dụ: <code>[01]</code> <code>[03]</code> <code>[00 00 00 01]</code> <code>[84 0A]</code> = Read Holding Registers slave 1, register 0, count 1</p>
+    </div>
+    <div class="about-grid" style="margin-top:14px">
+      <div class="about-card">
+        <h4>Timing Rules</h4>
+        <table class="cmp-tbl">
+          <tr><th>Baudrate</th><th>Char Time</th><th>1.5T (max intra)</th><th>3.5T (min inter)</th></tr>
+          <tr><td>9600</td><td>1.146 ms</td><td>1.719 ms</td><td>4.010 ms</td></tr>
+          <tr><td>19200</td><td>0.573 ms</td><td>0.859 ms</td><td>2.005 ms</td></tr>
+          <tr><td>38400</td><td>0.286 ms</td><td>0.430 ms</td><td>1.750 ms*</td></tr>
+          <tr><td>115200</td><td>0.095 ms</td><td>0.143 ms</td><td>1.750 ms*</td></tr>
+        </table>
+        <p style="margin-top:6px;font-size:10px;color:var(--muted)">* Spec: ≥38400 baud dùng fixed 1.75ms</p>
+      </div>
+      <div class="about-card">
+        <h4>CRC-16 Modbus</h4>
+        <p>Polynomial <code>0xA001</code>, init <code>0xFFFF</code>. Phát hiện 99.998% lỗi bit.</p>
+        <div class="mono-block">For each byte:
+  CRC = CRC XOR byte
+  Repeat 8x:
+    if bit0=1: CRC=(CRC>>1) XOR 0xA001
+    else:      CRC=(CRC>>1)
+
+Result: LSB first in frame</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 Modes -->
+  <div class="about-section">
+    <h3><span class="sec-icon">🔍</span> 3 Mode chẩn đoán</h3>
+    <div class="about-grid">
+      <div class="about-card" style="border-left:3px solid var(--blue)">
+        <h4><span class="mode-badge mode-1">MODE 1</span> Passive Sniffer</h4>
+        <p>USB-RS485 tap <strong>song song</strong> vào bus, chỉ RX. Không ảnh hưởng bus.</p>
+        <div class="wire-diagram">Master ─── A ───┬──── S1 ─── S2 ─── S3
+                  │
+  Pi (sniffer) ───┘  ← RX only, DE=LOW</div>
+        <p style="margin-top:8px">✅ An toàn 24/7 &nbsp; ⚠️ Không biết direction &nbsp; 📊 8 diagnostics</p>
+      </div>
+      <div class="about-card" style="border-left:3px solid var(--accent)">
+        <h4><span class="mode-badge mode-2">MODE 2</span> Inline Proxy</h4>
+        <p>2 USB-RS485 chèn <strong>giữa</strong> Master và Slaves. Forward byte-level.</p>
+        <div class="wire-diagram">Master ═══ ComA ═══ [Pi] ═══ ComB ═══ Slaves
+             segment 1          segment 2
+
+  ComA RX = Master → REQUEST
+  ComB RX = Slave  → RESPONSE</div>
+        <p style="margin-top:8px">✅ Biết direction 100% &nbsp; ✅ Exact response time &nbsp; 📊 15 diagnostics</p>
+      </div>
+      <div class="about-card" style="border-left:3px solid var(--purple)">
+        <h4><span class="mode-badge mode-3">MODE 3</span> Dual-Pi</h4>
+        <p>Pi-1 (inline ở đầu) + Pi-2 (passive ở cuối). Cross-correlation 2 điểm.</p>
+        <div class="wire-diagram">Master ─ [Pi-1 Inline] ─ S1 ─ S2 ─ [Pi-2 Passive]
+  [120Ω]  ComA    ComB              tap RX   [120Ω]
+
+  Pi-1:8766 ←── WiFi/API ──→ Pi-2:8766
+                (cross-correlate)</div>
+        <p style="margin-top:8px">✅ Signal degradation &nbsp; ✅ Noise localization &nbsp; 📊 23 diagnostics</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diagnostic Rules -->
+  <div class="about-section">
+    <h3><span class="sec-icon">🩺</span> Quy tắc chẩn đoán</h3>
+    <div class="about-grid">
+      <div class="about-card">
+        <h4>⬡ Mode 1 — Passive (8 rules)</h4>
+        <div class="diag-rule"><div class="diag-num">1</div><div class="diag-body"><h5>HIGH_CRC_ERRORS</h5><p>CRC fail >5% → warning. Nguyên nhân: dây hỏng, thiếu termination, EMI.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">2</div><div class="diag-body"><h5>JUNK_BYTES</h5><p>Bytes không thuộc frame nào >2%. Noise trên bus, baud mismatch.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">3</div><div class="diag-body"><h5>BUS_SILENCE</h5><p>Im lặng >5s. Master offline hoặc bus bị đứt.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">4</div><div class="diag-body"><h5>HIGH_BUS_UTILIZATION</h5><p>Bandwidth >70%. Slave có thể bị timeout do quá tải.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">5</div><div class="diag-body"><h5>CHATTY_MASTER</h5><p>Poll >50 req/s tới 1 slave. Chiếm quá nhiều bandwidth.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">6</div><div class="diag-body"><h5>EXCEPTION_RESPONSES</h5><p>Exception >10%. Slave trả lỗi: Illegal Function/Address/Value.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">7</div><div class="diag-body"><h5>SLOW_RESPONSE</h5><p>Response >500ms (heuristic). Slave xử lý chậm.</p></div></div>
+        <div class="diag-rule"><div class="diag-num">8</div><div class="diag-body"><h5>NO_RESPONSE</h5><p>Timeout >5s (heuristic). Slave offline hoặc address sai.</p></div></div>
+      </div>
+      <div class="about-card">
+        <h4>⬡ Mode 2 — Inline Proxy (+7 rules)</h4>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">9</div><div class="diag-body"><h5>EXACT_RESPONSE_TIME</h5><p>ts<sub>ComB</sub> − ts<sub>ComA</sub> → ms chính xác, không heuristic.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">10</div><div class="diag-body"><h5>NO_RESPONSE_EXACT</h5><p>Request trên ComA, timeout trên ComB → 100% confirmed.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">11</div><div class="diag-body"><h5>DIRECTION_VIOLATION</h5><p>Frame từ ComB (slave) mà không có request trước đó.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">12</div><div class="diag-body"><h5>LATE_RESPONSE</h5><p>Response đến sau khi Master đã gửi request mới.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">13</div><div class="diag-body"><h5>BROADCAST_RESPONSE</h5><p>Slave trả lời broadcast (ID=0) → vi phạm Modbus spec.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">14</div><div class="diag-body"><h5>DUPLICATE_SLAVE_ID</h5><p>1 request → 2+ responses. 2 thiết bị cùng address.</p></div></div>
+        <div class="diag-rule"><div class="diag-num" style="background:#2c1a00">15</div><div class="diag-body"><h5>FRAME_CORRUPTION_DIR</h5><p>CRC OK trên ComA nhưng fail trên ComB → lỗi cáp 1 chiều.</p></div></div>
+      </div>
+    </div>
+    <div class="about-card" style="margin-top:14px">
+      <h4>⬡ Mode 3 — Dual-Pi Cross-correlation (+8 rules)</h4>
+      <div class="about-grid" style="grid-template-columns:1fr 1fr">
+        <div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">16</div><div class="diag-body"><h5>SIGNAL_DEGRADATION</h5><p>CRC% Pi-2 > Pi-1 → suy hao tín hiệu theo khoảng cách.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">17</div><div class="diag-body"><h5>SEGMENT_FAULT</h5><p>Frame Pi-1 forward nhưng Pi-2 không thấy → đứt dây.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">18</div><div class="diag-body"><h5>PROPAGATION_DELAY</h5><p>Đo jitter Δt giữa 2 Pi → cable/timing anomaly.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">19</div><div class="diag-body"><h5>TERMINATION_FAULT</h5><p>So sánh CRC pattern → biết thiếu 120Ω đầu nào.</p></div></div>
+        </div>
+        <div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">20</div><div class="diag-body"><h5>NOISE_LOCALIZATION</h5><p>So sánh junk bytes 2 Pi → xác định vùng nhiễu EMI.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">21</div><div class="diag-body"><h5>FRAME_LOSS</h5><p>Frame loss rate per-slave → driver yếu, stub dài.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">22</div><div class="diag-body"><h5>SLAVE_INTERFERENCE</h5><p>Cross-correlate TX time + CRC → slave gây nhiễu.</p></div></div>
+          <div class="diag-rule"><div class="diag-num" style="background:#1a0a2e">23</div><div class="diag-body"><h5>TIMING_DRIFT</h5><p>Frame duration khác nhau → baud rate / clock mismatch.</p></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comparison Table -->
+  <div class="about-section">
+    <h3><span class="sec-icon">📊</span> So sánh tổng hợp</h3>
+    <div class="about-card">
+      <div style="overflow-x:auto">
+        <table class="cmp-tbl">
+          <thead><tr>
+            <th>Capability</th>
+            <th style="text-align:center"><span class="mode-badge mode-1">MODE 1</span> Passive</th>
+            <th style="text-align:center"><span class="mode-badge mode-2">MODE 2</span> Inline</th>
+            <th style="text-align:center"><span class="mode-badge mode-3">MODE 3</span> Dual-Pi</th>
+          </tr></thead>
+          <tbody>
+            <tr><td><strong>Phần cứng</strong></td><td style="text-align:center">1 Pi, 1 USB</td><td style="text-align:center">1 Pi, 2 USB</td><td style="text-align:center">2 Pi, 3 USB</td></tr>
+            <tr><td><strong>Ảnh hưởng bus</strong></td><td style="text-align:center" class="check">Không</td><td style="text-align:center" class="warn">SPOF</td><td style="text-align:center" class="warn">SPOF</td></tr>
+            <tr><td>CRC / Junk / Silence / Util</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td>Chatty Master / Exceptions</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Exact Response Time</strong></td><td style="text-align:center" class="warn">≈ heuristic</td><td style="text-align:center" class="check">✓ exact</td><td style="text-align:center" class="check">✓ exact</td></tr>
+            <tr><td><strong>No Response (confirmed)</strong></td><td style="text-align:center" class="warn">≈ heuristic</td><td style="text-align:center" class="check">✓ 100%</td><td style="text-align:center" class="check">✓ 100%</td></tr>
+            <tr><td>Direction Violation</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td>Late / Broadcast / Duplicate</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Signal Degradation</strong></td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Noise Localization</strong></td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Termination Fault (which end)</strong></td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Frame Loss / Segment Fault</strong></td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr><td><strong>Slave Interference</strong></td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="cross">—</td><td style="text-align:center" class="check">✓</td></tr>
+            <tr style="background:var(--surface2)"><td><strong>Tổng Diagnostics</strong></td><td style="text-align:center;font-weight:700;color:var(--blue)">8</td><td style="text-align:center;font-weight:700;color:var(--accent)">15</td><td style="text-align:center;font-weight:700;color:var(--purple)">23</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- When to use -->
+  <div class="about-section">
+    <h3><span class="sec-icon">🎯</span> Khi nào dùng mode nào?</h3>
+    <div class="about-grid">
+      <div class="about-card">
+        <h4 style="color:var(--blue)">Mode 1 — Passive</h4>
+        <ul>
+          <li>Monitor bus 24/7 không ảnh hưởng</li>
+          <li>Kiểm tra sức khỏe tổng quan</li>
+          <li>Tìm slave gây nhiều lỗi nhất</li>
+        </ul>
+      </div>
+      <div class="about-card">
+        <h4 style="color:var(--accent)">Mode 2 — Inline Proxy</h4>
+        <ul>
+          <li>Đo response time chính xác</li>
+          <li>Confirm slave không trả lời</li>
+          <li>Debug firmware (direction violation, broadcast)</li>
+          <li>Tìm 2 slave cùng address</li>
+        </ul>
+      </div>
+      <div class="about-card">
+        <h4 style="color:var(--purple)">Mode 3 — Dual-Pi</h4>
+        <ul>
+          <li>Bus CRC lỗi random, không rõ nguyên nhân</li>
+          <li>Nghi ngờ cáp hỏng giữa 2 điểm</li>
+          <li>Tìm slave gây nhiễu bus</li>
+          <li>Kiểm tra termination đầu nào thiếu</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:30px;color:var(--muted);font-size:11px;border-top:1px solid var(--border);margin-top:20px">
+    <p>Modbus RTU Sniffer & Diagnostics Tool — Built with ❤️ for Industrial IoT</p>
+    <p style="margin-top:4px">RS-485 / Modbus RTU / 23 Diagnostic Rules / 3 Operating Modes</p>
+  </div>
+</div>
+
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws = null;
@@ -324,7 +588,7 @@ async function checkNavStatus() {
 // ── Tabs ──────────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab').forEach((t,i) => {
-    const ids=['health','frames','config'];
+    const ids=['health','frames','config','about'];
     t.classList.toggle('active', ids[i]===name);
   });
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
