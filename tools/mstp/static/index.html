@@ -23,13 +23,48 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .ws-dot.ok{background:var(--green);}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 
-/* ── Tab bar ────────────────────────────────── */
+/* ── Nav links ─────────────────────────────── */
+.nav-links{display:flex;gap:6px;margin-left:auto;}
+.nav-link{font-size:11px;padding:4px 10px;border-radius:99px;
+  border:1px solid var(--border);color:var(--muted);text-decoration:none;
+  transition:.2s;white-space:nowrap;}
+.nav-link:hover{border-color:var(--accent);color:var(--text);}
+.nav-status{display:inline-block;width:6px;height:6px;border-radius:50%;
+  margin-right:4px;background:var(--red);}
+.nav-status.up{background:var(--green);}
+
+/* ── Tab bar (grouped dropdown) ──────────── */
 .tabs{background:var(--surface);border-bottom:1px solid var(--border);
-  padding:0 20px;display:flex;gap:2px;overflow-x:auto;}
-.tab{padding:10px 18px;font-size:12px;font-weight:600;cursor:pointer;
-  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;transition:.15s;}
+  padding:0 20px;display:flex;gap:0;align-items:stretch;position:relative;}
+.tab-group{position:relative;}
+.tab-group-btn{padding:10px 16px;font-size:12px;font-weight:600;cursor:pointer;
+  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;transition:.15s;
+  display:flex;align-items:center;gap:5px;user-select:none;background:transparent;border-top:none;border-left:none;border-right:none;}
+.tab-group-btn:hover{color:var(--text);}
+.tab-group.active .tab-group-btn{border-bottom-color:var(--accent);color:var(--accent);}
+.tab-group-btn .arrow{font-size:8px;transition:transform .2s;opacity:.5;}
+.tab-group.open .tab-group-btn .arrow{transform:rotate(180deg);}
+.tab-dropdown{position:absolute;top:100%;left:0;min-width:190px;background:var(--surface);
+  border:1px solid var(--border);border-radius:0 0 var(--radius) var(--radius);
+  box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:100;display:none;}
+.tab-group.open .tab-dropdown{display:block;}
+.tab-dropdown-item{display:flex;align-items:center;gap:8px;padding:10px 16px;font-size:12px;
+  color:var(--muted);cursor:pointer;transition:.15s;white-space:nowrap;}
+.tab-dropdown-item:hover{background:var(--surface2);color:var(--text);}
+.tab-dropdown-item.active{color:var(--accent);background:rgba(56,189,248,.08);}
+.tab-dropdown-item .dd-icon{font-size:14px;width:18px;text-align:center;}
+.tab{padding:10px 16px;font-size:12px;font-weight:600;cursor:pointer;
+  border-bottom:2px solid transparent;color:var(--muted);white-space:nowrap;transition:.15s;
+  display:flex;align-items:center;gap:5px;}
 .tab:hover{color:var(--text);}
 .tab.active{border-bottom-color:var(--accent);color:var(--accent);}
+/* Status bar */
+.status-bar{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);
+  padding:4px 20px;display:flex;gap:16px;font-size:10px;color:var(--muted);z-index:50;}
+.status-bar .sbar-item{display:flex;align-items:center;gap:4px;}
+.status-bar .sbar-dot{width:5px;height:5px;border-radius:50%;}
+.status-bar .sbar-dot.ok{background:var(--green);}
+.status-bar .sbar-dot.err{background:var(--red);}
 
 /* ── Layout ─────────────────────────────────── */
 .page{display:none;padding:18px 20px;max-width:1360px;margin:0 auto;}
@@ -167,25 +202,57 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 
 <header>
   <div class="ws-dot" id="wsStatus"></div>
-  <h1>🔌 MS/TP Tools Dashboard</h1>
+  <h1>🔌 MS/TP Tools</h1>
   <span id="networkLabel" style="font-size:11px;color:var(--muted);background:#1e2740;
     padding:3px 10px;border-radius:99px;font-family:monospace;">/dev/ttyUSB0 @ 38400</span>
-  <div style="flex:1"></div>
-  <div style="display:flex;gap:6px;margin-right:8px;">
-    <a href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8080','_blank')" style="font-size:11px;padding:4px 10px;border-radius:99px;border:1px solid var(--border);color:var(--muted);text-decoration:none;transition:.2s;white-space:nowrap;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
-      <span id="nsGw" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;background:var(--red);"></span>Gateway V2</a>
-    <a href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8766','_blank')" style="font-size:11px;padding:4px 10px;border-radius:99px;border:1px solid var(--border);color:var(--muted);text-decoration:none;transition:.2s;white-space:nowrap;" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--text)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
-      <span id="nsMb" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px;background:var(--red);"></span>📟 Modbus RTU</a>
+  <div class="nav-links">
+    <a class="nav-link" href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8080','_blank')">
+      <span class="nav-status" id="nsGateway"></span>Gateway V2</a>
+    <a class="nav-link" href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8766','_blank')">
+      <span class="nav-status" id="nsModbus"></span>Modbus RTU</a>
   </div>
-  <button class="btn btn-sm" onclick="triggerScan()">⟳ Scan</button>
+  <button class="btn btn-sm" onclick="triggerScan()" style="margin-left:8px;">⟳ Scan</button>
 </header>
 
-<div class="tabs">
-  <div class="tab active" onclick="showTab('monitor')">🔬 Monitor</div>
-  <div class="tab" onclick="showTab('sniffer')">📡 Bus Health</div>
-  <div class="tab" onclick="showTab('filetransfer')">📤 File Transfer</div>
-  <div class="tab" onclick="showTab('config')">⚙️ Network Config</div>
-  <div class="tab" onclick="showTab('about')">📖 About</div>
+<div class="tabs" id="main-tabs">
+  <!-- Group: Diagnostics -->
+  <div class="tab-group active" id="grp-diag">
+    <button class="tab-group-btn" onclick="toggleGroup('diag')">
+      🏥 Diagnostics <span class="arrow">▼</span>
+    </button>
+    <div class="tab-dropdown">
+      <div class="tab-dropdown-item active" onclick="navTab('monitor','diag')">
+        <span class="dd-icon">🔬</span> Node Monitor
+      </div>
+      <div class="tab-dropdown-item" onclick="navTab('sniffer','diag')">
+        <span class="dd-icon">📡</span> Bus Health
+      </div>
+    </div>
+  </div>
+  <!-- Group: Tools -->
+  <div class="tab-group" id="grp-tools">
+    <button class="tab-group-btn" onclick="toggleGroup('tools')">
+      🔧 Tools <span class="arrow">▼</span>
+    </button>
+    <div class="tab-dropdown">
+      <div class="tab-dropdown-item" onclick="navTab('filetransfer','tools')">
+        <span class="dd-icon">📤</span> File Transfer
+      </div>
+    </div>
+  </div>
+  <!-- Single: Config -->
+  <div class="tab" onclick="navTab('config',null)">⚙️ Config</div>
+  <!-- Single: About -->
+  <div class="tab" onclick="navTab('about',null)">📖 About</div>
+</div>
+
+<!-- Status Bar -->
+<div class="status-bar">
+  <div class="sbar-item"><span class="sbar-dot" id="sbar-ws-dot"></span> <span id="sbar-ws">WS: —</span></div>
+  <div class="sbar-item">🔌 Nodes: <span id="sbar-nodes">—</span></div>
+  <div class="sbar-item">🔄 Token: <span id="sbar-token">—</span></div>
+  <div class="sbar-item">⏱ <span id="sbar-uptime">—</span></div>
+  <div class="sbar-item" style="margin-left:auto;">🔌 MS/TP Tools v1.3</div>
 </div>
 
 <!-- ══════════ TAB: MONITOR ══════════ -->
@@ -631,16 +698,68 @@ const state = { nodes:{}, selected:null };
 let ws = null;
 
 // ── Tabs ──────────────────────────────────────────────────────────────────────
-function showTab(name) {
-  document.querySelectorAll('.tab').forEach((t,i)=>{
-    const ids=['monitor','sniffer','filetransfer','config','about'];
-    t.classList.toggle('active', ids[i]===name);
-  });
-  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.getElementById('page-'+name).classList.add('active');
-  if(name==='sniffer') loadSniffer();
-  if(name==='config')  loadCurrentConfig();
+// ── Tabs (grouped dropdown navigation) ────────────────────────────────────────
+const TAB_GROUP_MAP = {
+  monitor:'diag', sniffer:'diag',
+  filetransfer:'tools',
+  config:null, about:null
+};
+
+function navTab(name, groupId) {
+  document.querySelectorAll('.tab-group').forEach(g => g.classList.remove('open'));
+  document.querySelectorAll('.tab-group').forEach(g => g.classList.remove('active'));
+  document.querySelectorAll('#main-tabs > .tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-dropdown-item').forEach(i => i.classList.remove('active'));
+
+  if (groupId) {
+    const grp = document.getElementById('grp-' + groupId);
+    if (grp) grp.classList.add('active');
+    grp?.querySelectorAll('.tab-dropdown-item').forEach(item => {
+      const tabName = item.getAttribute('onclick')?.match(/navTab\('(\w+)'/)?.[1];
+      if (tabName === name) item.classList.add('active');
+    });
+  } else {
+    document.querySelectorAll('#main-tabs > .tab').forEach(t => {
+      const tabName = t.getAttribute('onclick')?.match(/navTab\('(\w+)'/)?.[1];
+      if (tabName === name) t.classList.add('active');
+    });
+  }
+
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const page = document.getElementById('page-' + name);
+  if (page) page.classList.add('active');
+  if (name === 'sniffer') loadSniffer();
+  if (name === 'config') loadCurrentConfig();
 }
+
+function showTab(name) { navTab(name, TAB_GROUP_MAP[name]); }
+
+function toggleGroup(groupId) {
+  const grp = document.getElementById('grp-' + groupId);
+  const isOpen = grp.classList.contains('open');
+  document.querySelectorAll('.tab-group').forEach(g => g.classList.remove('open'));
+  if (!isOpen) grp.classList.add('open');
+}
+
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.tab-group'))
+    document.querySelectorAll('.tab-group').forEach(g => g.classList.remove('open'));
+});
+
+// Status bar update
+let _startTime = Date.now();
+function updateStatusBar() {
+  const wsDot = document.getElementById('sbar-ws-dot');
+  const wsText = document.getElementById('sbar-ws');
+  if (ws && ws.readyState === 1) {
+    wsDot.className = 'sbar-dot ok'; wsText.textContent = 'WS: Connected';
+  } else {
+    wsDot.className = 'sbar-dot err'; wsText.textContent = 'WS: Disconnected';
+  }
+  const secs = Math.floor((Date.now() - _startTime) / 1000);
+  document.getElementById('sbar-uptime').textContent = `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
+}
+setInterval(updateStatusBar, 10000);
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connect(){
