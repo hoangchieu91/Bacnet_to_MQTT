@@ -18,6 +18,9 @@ const NAV = [
     { page: 'groups', label: 'Groups', icon: Users },
     { page: 'monitor', label: 'Monitor', icon: Eye },
   ]},
+  { group: 'TOOLS', items: [
+    { page: 'bacnet-tools', label: 'BACnet Tools', icon: Wrench },
+  ]},
   { group: 'ANALYTICS', items: [
     { page: 'charts', label: 'Charts', icon: TrendingUp },
     { page: 'logs', label: 'Logs', icon: FileText },
@@ -27,9 +30,6 @@ const NAV = [
   ]},
   { group: 'CONFIG', items: [
     { page: 'settings', label: 'Settings', icon: Settings },
-  ]},
-  { group: 'TOOLS', items: [
-    { page: 'bacnet-tools', label: 'BACnet Tools', icon: Wrench },
   ]},
 ];
 
@@ -101,22 +101,26 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
             })}
           </div>
         ))}
-      </nav>
 
-      {/* External Tools */}
-      {!collapsed && (
-        <div className="px-3 py-2 border-t border-border">
-          <div className="px-2 mb-1 text-[9px] font-bold tracking-widest text-text-muted uppercase">Tools</div>
+        {/* External Diagnostic Tools */}
+        <div>
+          {!collapsed && (
+            <div className="px-2 mb-1 text-[9px] font-bold tracking-widest text-text-muted uppercase">Diagnostics</div>
+          )}
           <a href={`${window.location.protocol}//${window.location.hostname}:8765`} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all">
-            🔌 MS/TP Tools
+            title={collapsed ? 'MS/TP Tools' : undefined}
+            className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all ${collapsed ? 'justify-center' : ''}`}>
+            <span className="text-sm shrink-0">🔌</span>
+            {!collapsed && <>MS/TP Tools <span className="ml-auto text-[9px] text-text-muted">↗</span></>}
           </a>
           <a href={`${window.location.protocol}//${window.location.hostname}:8766`} target="_blank" rel="noopener noreferrer"
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all">
-            📟 Modbus RTU
+            title={collapsed ? 'Modbus RTU' : undefined}
+            className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs font-medium text-text-secondary hover:text-white hover:bg-white/[0.04] transition-all ${collapsed ? 'justify-center' : ''}`}>
+            <span className="text-sm shrink-0">📟</span>
+            {!collapsed && <>Modbus RTU <span className="ml-auto text-[9px] text-text-muted">↗</span></>}
           </a>
         </div>
-      )}
+      </nav>
 
       {/* Status footer */}
       <div className={`px-3 py-3 border-t border-border space-y-1.5 ${collapsed ? 'flex flex-col items-center' : ''}`}>

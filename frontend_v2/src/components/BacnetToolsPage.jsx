@@ -225,7 +225,10 @@ export function BacnetToolsPage() {
           )}
           {loadingObjects && <Loader size={14} className="animate-spin text-accent-primary" />}
           <span className="text-[10px] text-text-muted ml-auto">
-            {devices.length} devices discovered
+            {devices.length > 0
+              ? <><span className="text-success font-bold">{devices.length}</span> devices discovered</>
+              : <span className="text-amber-400">⚠ No devices — check Settings or run Who-Is Scan</span>
+            }
           </span>
         </div>
       </Card>
@@ -239,9 +242,40 @@ export function BacnetToolsPage() {
           <div className="lg:col-span-4">
             <Card title="Object List" icon="📋">
               {objects.length === 0 ? (
-                <p className="text-xs text-text-muted">
-                  {selectedDevice ? 'No objects found' : 'Select a device to browse objects'}
-                </p>
+                <div className="space-y-3 py-2">
+                  {!selectedDevice ? (
+                    <div className="text-center">
+                      <div className="text-2xl mb-2">🔍</div>
+                      <p className="text-xs text-text-muted">Select a device above to browse its objects</p>
+                      <div className="mt-3 space-y-1.5">
+                        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                          <span className="w-5 h-5 rounded-full bg-accent-primary/20 text-accent-primary flex items-center justify-center text-[10px] font-bold">1</span>
+                          Choose a device from the dropdown
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                          <span className="w-5 h-5 rounded-full bg-accent-primary/20 text-accent-primary flex items-center justify-center text-[10px] font-bold">2</span>
+                          Expand object groups (Analog, Binary...)
+                        </div>
+                        <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                          <span className="w-5 h-5 rounded-full bg-accent-primary/20 text-accent-primary flex items-center justify-center text-[10px] font-bold">3</span>
+                          Click an object to view its properties
+                        </div>
+                      </div>
+                      {devices.length === 0 && (
+                        <button onClick={() => setTab('scan')}
+                          className="mt-3 px-3 py-1.5 bg-accent-primary/10 text-accent-primary border border-accent-primary/30 rounded-lg text-[11px] font-medium hover:bg-accent-primary/20 transition-all">
+                          📡 Run Who-Is Scan to find devices
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <div className="text-2xl mb-2">📭</div>
+                      <p className="text-xs text-text-muted">No objects found on device {selectedDevice}</p>
+                      <p className="text-[10px] text-text-muted mt-1">The device may not support ReadObjectList or may be unreachable.</p>
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-1 max-h-[500px] overflow-y-auto">
                   {Object.entries(grouped).map(([group, objs]) => (
@@ -282,7 +316,11 @@ export function BacnetToolsPage() {
                   <Loader size={14} className="animate-spin" /> Reading properties...
                 </div>
               ) : Object.keys(properties).length === 0 ? (
-                <p className="text-xs text-text-muted">Click an object to view its properties</p>
+                <div className="text-center py-8">
+                  <div className="text-3xl mb-2">📋</div>
+                  <p className="text-xs text-text-muted">Click an object in the left panel to view all its properties</p>
+                  <p className="text-[10px] text-text-muted mt-1">Properties include: objectName, presentValue, units, statusFlags, description...</p>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -318,7 +356,26 @@ export function BacnetToolsPage() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <Card title="Write Property" icon="✏️">
             {!selectedObject ? (
-              <p className="text-xs text-text-muted">Select an object in Browser tab first, then switch here to write.</p>
+              <div className="space-y-3 py-2">
+                <div className="text-center">
+                  <div className="text-2xl mb-2">✏️</div>
+                  <p className="text-xs text-text-muted">No object selected</p>
+                  <div className="mt-3 space-y-1.5">
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                      <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-bold">1</span>
+                      Go to <button onClick={() => setTab('browse')} className="text-accent-primary hover:underline font-medium">Device Browser</button>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                      <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-bold">2</span>
+                      Select a device and click an object
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] text-text-muted">
+                      <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-bold">3</span>
+                      Come back here to write properties
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="space-y-3">
                 <div className="text-xs text-text-muted">
@@ -364,7 +421,11 @@ export function BacnetToolsPage() {
           </Card>
           <Card title="Quick Actions" icon="⚡">
             {!selectedObject ? (
-              <p className="text-xs text-text-muted">Select an object first</p>
+              <div className="text-center py-4">
+                <div className="text-2xl mb-2">⚡</div>
+                <p className="text-xs text-text-muted">Quick actions will appear after selecting an object</p>
+                <p className="text-[10px] text-text-muted mt-1">Rename, edit description, write value, set COV...</p>
+              </div>
             ) : (
               <div className="space-y-2">
                 <button onClick={() => { setWriteTarget({ property: 'objectName', value: '', priority: '' }); }}
@@ -393,7 +454,7 @@ export function BacnetToolsPage() {
       {tab === 'manage' && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <Card title="Reinitialize Device" icon="🔄">
-            {!selectedDevice ? <p className="text-xs text-text-muted">Select a device first</p> : (
+            {!selectedDevice ? <div className="text-center py-3"><div className="text-xl mb-1">🔄</div><p className="text-xs text-text-muted">Select a device above to reinitialize it</p><p className="text-[10px] text-text-muted mt-1">Warmstart = soft restart, Coldstart = factory reset</p></div> : (
               <div className="space-y-3">
                 <p className="text-[11px] text-text-muted">Send ReinitializeDevice to device {selectedDevice}</p>
                 <div className="flex gap-2">
@@ -413,7 +474,7 @@ export function BacnetToolsPage() {
           </Card>
 
           <Card title="Communication Control" icon="📡">
-            {!selectedDevice ? <p className="text-xs text-text-muted">Select a device first</p> : (
+            {!selectedDevice ? <div className="text-center py-3"><div className="text-xl mb-1">📡</div><p className="text-xs text-text-muted">Select a device to control communication</p><p className="text-[10px] text-text-muted mt-1">Enable or disable BACnet communication on the device</p></div> : (
               <div className="space-y-3">
                 <p className="text-[11px] text-text-muted">Enable/disable device communication</p>
                 <div className="flex gap-2">
