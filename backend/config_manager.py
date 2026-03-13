@@ -29,37 +29,87 @@ class ConfigManager:
 
     # ── load / save ────────────────────────────
     def load(self) -> GatewayConfig:
-        """Load config from runtime file, falling back to defaults."""
+        """Load config from runtime file, falling back to defaults on any error."""
         if not self._path.exists():
             logger.info("No runtime config found – copying defaults.")
-            shutil.copy(_DEFAULT_CONFIG_PATH, self._path)
+            try:
+                shutil.copy(_DEFAULT_CONFIG_PATH, self._path)
+            except Exception as copy_err:
+                logger.error("Cannot copy default config: %s — using built-in defaults", copy_err)
+                self._config = GatewayConfig()
+                return self._config
 
-        with open(self._path, "r") as f:
-            raw: dict[str, Any] = json.load(f)
+        raw: dict = {}
+        try:
+            with open(self._path, "r") as f:
+                raw = json.load(f)
+        except (json.JSONDecodeError, OSError) as parse_err:
+            # Corrupt file: back it up and start from defaults
+            backup = self._path.with_suffix(".json.bak")
+            logger.error(
+                "Config file corrupt or unreadable (%s). "
+                "Backing up to %s and starting from defaults.",
+                parse_err, backup,
+            )
+            try:
+                shutil.copy(self._path, backup)
+                shutil.copy(_DEFAULT_CONFIG_PATH, self._path)
+                with open(self._path, "r") as f:
+                    raw = json.load(f)
+            except Exception as fallback_err:
+                logger.error("Cannot load defaults either: %s — using built-in defaults", fallback_err)
+                self._config = GatewayConfig()
+                return self._config
 
-        self._config = GatewayConfig(**raw)
+        try:
+            self._config = GatewayConfig(**raw)
+        except Exception as model_err:
+            logger.error(
+                "Config schema validation failed: %s. Using built-in defaults.", model_err
+            )
+            self._config = GatewayConfig()
 
-        # Hydrate mappings list
+        # Hydrate sub-lists (each individually guarded so one bad entry doesn't abort all)
         raw_mappings = raw.get("gateway", {}).get("mappings", [])
-        self._mappings = [PointMapping(**m) for m in raw_mappings]
+        self._mappings = []
+        for m in raw_mappings:
+            try:
+                self._mappings.append(PointMapping(**m))
+            except Exception as e:
+                logger.warning("Skipping invalid mapping %s: %s", m.get('id', '?'), e)
 
-        # Hydrate charts list
         raw_charts = raw.get("charts", [])
-        self._charts = [ChartConfig(**c) for c in raw_charts]
+        self._charts = []
+        for c in raw_charts:
+            try:
+                self._charts.append(ChartConfig(**c))
+            except Exception as e:
+                logger.warning("Skipping invalid chart %s: %s", c.get('id', '?'), e)
 
-        # Hydrate groups list
         raw_groups = raw.get("groups", [])
-        self._groups = [GroupConfig(**g) for g in raw_groups]
+        self._groups = []
+        for g in raw_groups:
+            try:
+                self._groups.append(GroupConfig(**g))
+            except Exception as e:
+                logger.warning("Skipping invalid group %s: %s", g.get('id', '?'), e)
 
-        # Hydrate schedules list
         raw_schedules = raw.get("schedules", [])
-        self._schedules = [ScheduleEntry(**s) for s in raw_schedules]
+        self._schedules = []
+        for s in raw_schedules:
+            try:
+                self._schedules.append(ScheduleEntry(**s))
+            except Exception as e:
+                logger.warning("Skipping invalid schedule %s: %s", s.get('id', '?'), e)
 
-        logger.info("Configuration loaded from %s", self._path)
+        logger.info(
+            "Configuration loaded from %s (%d mappings, %d schedules, %d groups)",
+            self._path, len(self._mappings), len(self._schedules), len(self._groups),
+        )
         return self._config
 
     def save(self) -> None:
-        """Persist current config + mappings to disk."""
+        """Atomically persist current config + mappings to disk."""
         if self._config is None:
             self._config = GatewayConfig()
 
@@ -70,9 +120,19 @@ class ConfigManager:
         data["schedules"] = [s.model_dump() for s in self._schedules]
 
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._path, "w") as f:
-            json.dump(data, f, indent=2, default=str)
-        logger.info("Configuration saved to %s", self._path)
+        # Write to tmp file first, then rename — prevents corruption on crash
+        tmp = self._path.with_suffix(".json.tmp")
+        try:
+            with open(tmp, "w") as f:
+                json.dump(data, f, indent=2, default=str)
+            tmp.replace(self._path)  # atomic on POSIX
+            logger.info("Configuration saved to %s", self._path)
+        except Exception as save_err:
+            logger.error("Failed to save config: %s", save_err)
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
 
     # ── accessors ──────────────────────────────
     @property
@@ -81,6 +141,13 @@ class ConfigManager:
             self.load()
         assert self._config is not None
         return self._config
+
+    @property
+    def runtime_config(self) -> dict:
+        """Return the raw config as a dict (for service checks, diagnostics)."""
+        if self._config is None:
+            self.load()
+        return self._config.model_dump() if self._config else {}
 
     @property
     def mappings(self) -> list[PointMapping]:
@@ -203,6 +270,10 @@ class ConfigManager:
         self._mappings = [PointMapping(**m) for m in raw_mappings]
         raw_charts = data.get("charts", [])
         self._charts = [ChartConfig(**c) for c in raw_charts]
+        raw_groups = data.get("groups", [])
+        self._groups = [GroupConfig(**g) for g in raw_groups]
+        raw_schedules = data.get("schedules", [])
+        self._schedules = [ScheduleEntry(**s) for s in raw_schedules]
         self.save()
 
     # ── Chart Config CRUD ──────────────────────

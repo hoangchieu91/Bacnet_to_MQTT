@@ -143,10 +143,15 @@ class WebhookService:
                                 "Webhook [%s] attempt=%d HTTP %d",
                                 url, attempt, resp.status,
                             )
+                            # 4xx client errors → no point retrying, record failure immediately
+                            if 400 <= resp.status < 500:
+                                breaker.record_failure()
+                                logger.error("Webhook [%s] client error %d — aborting retries", url, resp.status)
+                                return
             except Exception as exc:
                 logger.warning("Webhook [%s] attempt=%d error: %s", url, attempt, exc)
 
-        # All retries exhausted
+        # All retries exhausted → record failure
         breaker.record_failure()
         logger.error("Webhook [%s] failed after %d attempts", url, len(_RETRY_DELAYS) + 1)
 

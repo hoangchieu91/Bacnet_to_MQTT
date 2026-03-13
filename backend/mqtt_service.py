@@ -24,6 +24,7 @@ class MqttService:
         self._client: mqtt.Client | None = None
         self._connected = False
         self._on_message_callback: Callable[[str, Any], None] | None = None
+        self._topic_callbacks: dict[str, Callable] = {}  # {topic_pattern: callback}
         self._lock = threading.Lock()
         self._publish_executor = ThreadPoolExecutor(
             max_workers=2, thread_name_prefix="mqtt_pub"
@@ -111,11 +112,11 @@ class MqttService:
 
     # ── subscribe ──────────────────────────────
     def subscribe(self, topic: str, callback: Callable[[str, Any], None] | None = None) -> None:
-        """Subscribe to a topic. Uses the global callback if none provided."""
+        """Subscribe to a topic. Stores callback per-topic to support multiple subscribers."""
         if self._client is None:
             return
         if callback:
-            self._on_message_callback = callback
+            self._topic_callbacks[topic] = callback
         self._client.subscribe(topic, qos=self._config.qos)
         logger.info("Subscribed to MQTT topic: %s", topic)
 
@@ -144,7 +145,25 @@ class MqttService:
             payload = msg.payload.decode(errors="replace")
 
         logger.debug("MQTT message on %s: %s", topic, payload)
-        if self._on_message_callback:
+
+        # Route to per-topic callback (exact match, then wildcard '#' patterns)
+        matched_cb = self._topic_callbacks.get(topic)
+        if matched_cb is None:
+            for pattern, cb in self._topic_callbacks.items():
+                if pattern.endswith("/#"):
+                    prefix = pattern[:-2]
+                    if topic == prefix or topic.startswith(prefix + "/"):
+                        matched_cb = cb
+                        break
+                elif pattern.endswith("/+"):
+                    prefix = pattern[:-2]
+                    if topic.startswith(prefix + "/") and "/" not in topic[len(prefix) + 1:]:
+                        matched_cb = cb
+                        break
+
+        if matched_cb:
+            matched_cb(topic, payload)
+        elif self._on_message_callback:
             self._on_message_callback(topic, payload)
 
     # ── config update ──────────────────────────

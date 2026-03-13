@@ -328,13 +328,11 @@ async def get_system_services():
 
     # MQTT broker external — try via config
     try:
-        mqtt_url = config_manager.runtime_config.get("mqtt", {}).get("url", "")
-        if mqtt_url:
-            import re
-            m = re.match(r"mqtt://([^:/]+):?(\d+)?", mqtt_url)
-            if m:
-                host, port = m.group(1), int(m.group(2) or 1883)
-                ports.append(check_tcp_port(host, port, f"MQTT Broker ({host})"))
+        mqtt_cfg = config_manager.runtime_config.get("mqtt", {})
+        ext_host = mqtt_cfg.get("broker_host", "")
+        ext_port = int(mqtt_cfg.get("broker_port", 1883))
+        if ext_host and ext_host not in ("localhost", "127.0.0.1"):
+            ports.append(check_tcp_port(ext_host, ext_port, f"MQTT Broker ({ext_host})"))
     except Exception:
         pass
 
@@ -1943,8 +1941,9 @@ async def tools_comm_control(body: dict):
 
 
 @app.post("/api/tools/time-sync")
-async def tools_time_sync(body: dict = {}):
+async def tools_time_sync(body: dict | None = None):
     """TimeSynchronization service (Phase 3)."""
+    body = body or {}
     if not bacnet_service or not bacnet_service.connected:
         return JSONResponse({"error": "BACnet not connected"}, 503)
 
@@ -1960,8 +1959,9 @@ async def tools_time_sync(body: dict = {}):
 
 
 @app.post("/api/tools/whois")
-async def tools_whois(body: dict = {}):
+async def tools_whois(body: dict | None = None):
     """Extended Who-Is scan with range (Phase 4: Network Diagnostics)."""
+    body = body or {}
     if not bacnet_service or not bacnet_service.connected:
         return JSONResponse({"error": "BACnet not connected"}, 503)
 

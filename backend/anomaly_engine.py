@@ -129,8 +129,15 @@ class AnomalyEngine:
 
     def add_rule(self, rule_dict: dict) -> AnomalyRule:
         import uuid
+        import dataclasses
         rule_dict.setdefault("id", str(uuid.uuid4())[:8])
-        rule = AnomalyRule(**rule_dict)
+        # Strip unknown keys to prevent TypeError on AnomalyRule construction
+        valid_fields = {f.name for f in dataclasses.fields(AnomalyRule)}
+        filtered = {k: v for k, v in rule_dict.items() if k in valid_fields}
+        try:
+            rule = AnomalyRule(**filtered)
+        except (TypeError, ValueError) as err:
+            raise ValueError(f"Invalid anomaly rule data: {err}") from err
         self._rules.append(rule)
         self._save_rules()
         return rule
@@ -235,25 +242,37 @@ class AnomalyEngine:
 
     async def _fire_alarm(self, rule: AnomalyRule, actual_value: Any):
         """Log event and publish MQTT alert."""
-        msg = (
-            f"[ANOMALY] {rule.name}: Expected {rule.expected_mapping_id}={rule.expected_value!r} "
-            f"but got {actual_value!r} after {rule.tolerance_seconds}s"
-        )
+        if rule.expected_mapping_id:
+            msg = (
+                f"[ANOMALY] {rule.name}: trigger={rule.trigger_mapping_id}, "
+                f"expected {rule.expected_mapping_id}={rule.expected_value!r} "
+                f"but got {actual_value!r} after {rule.tolerance_seconds}s"
+            )
+        else:
+            msg = (
+                f"[ANOMALY] {rule.name}: trigger={rule.trigger_mapping_id} "
+                f"value={actual_value!r} matched condition '{rule.trigger_condition}'"
+            )
         try:
             if self._history:
                 self._history.log_event(
                     event_type="anomaly",
-                    mapping_id=rule.trigger_mapping_id,
-                    mapping_label=rule.name,
-                    value=str(actual_value),
-                    severity=rule.severity,
                     message=msg,
+                    mapping_id=rule.trigger_mapping_id,
+                    severity=rule.severity,
+                    data={
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "actual_value": str(actual_value) if actual_value is not None else None,
+                        "expected_value": str(rule.expected_value) if rule.expected_value != "" else None,
+                        "condition": rule.trigger_condition,
+                    },
                 )
         except Exception as e:
             logger.warning(f"Could not log anomaly event: {e}")
 
         if self._mqtt and self._mqtt.connected:
-            topic = rule.notify_topic or f"bacnet/alerts/anomaly"
+            topic = rule.notify_topic or "bacnet/alerts/anomaly"
             payload = json.dumps({
                 "rule_id": rule.id,
                 "rule_name": rule.name,
@@ -261,7 +280,7 @@ class AnomalyEngine:
                 "trigger_mapping": rule.trigger_mapping_id,
                 "expected_mapping": rule.expected_mapping_id,
                 "expected_value": rule.expected_value,
-                "actual_value": str(actual_value),
+                "actual_value": str(actual_value) if actual_value is not None else None,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             try:
@@ -275,11 +294,10 @@ class AnomalyEngine:
             if self._history:
                 self._history.log_event(
                     event_type="anomaly_clear",
-                    mapping_id=rule.trigger_mapping_id,
-                    mapping_label=rule.name,
-                    value=None,
-                    severity="info",
                     message=f"[CLEAR] {rule.name} resolved",
+                    mapping_id=rule.trigger_mapping_id,
+                    severity="info",
+                    data={"rule_id": rule.id, "rule_name": rule.name},
                 )
         except Exception as e:
             logger.warning(f"Could not log anomaly clear: {e}")

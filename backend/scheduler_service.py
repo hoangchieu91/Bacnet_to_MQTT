@@ -52,15 +52,16 @@ class SchedulerService:
         return self._last_run.get(schedule_id, {"success": False, "message": "Unknown"})
 
     async def _loop(self):
-        """Main scheduler loop — checks every 30 seconds."""
-        try:
-            while True:
+        """Main scheduler loop — checks every 30 seconds. Auto-restarts on error."""
+        while True:
+            try:
                 await self._tick()
                 await asyncio.sleep(30)
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error("Scheduler loop error: %s", e)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error("Scheduler loop error (will retry in 60s): %s", e)
+                await asyncio.sleep(60)  # Back-off before retry to avoid tight error loop
 
     async def _tick(self):
         """Check all enabled schedules against current time."""
@@ -106,6 +107,14 @@ class SchedulerService:
     async def _execute_schedule(self, sched):
         """Write a value to a BACnet object according to the schedule."""
         run_time = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+
+        # Guard: BACnet must be connected
+        if not self._bacnet or not self._bacnet.connected:
+            msg = "BACnet not connected — schedule deferred"
+            logger.warning("Schedule '%s': %s", sched.name, msg)
+            self._last_run[sched.id] = {"time": run_time, "success": False, "message": msg}
+            return
+
         try:
             address = self._bacnet.get_device_address(sched.device_id)
             if not address:

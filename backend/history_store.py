@@ -48,62 +48,71 @@ class HistoryStore:
         self.max_events = 10_000
         # RLock: reentrant so that methods calling each other (e.g. record → ring_buffer) don't deadlock
         self._write_lock = threading.RLock()
+        # Per-point insert counters for ring-buffer frequency control
+        self._point_insert_counts: dict[str, int] = {}
 
     # ── Init / Close ──────────────────────────
     def init(self) -> None:
-        """Create DB directory, open connection, create tables."""
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute("PRAGMA synchronous=NORMAL")
-        self._conn.execute("PRAGMA cache_size=2000")  # ~8MB cache
-        self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
+        """Create DB directory, open connection, create tables. Never raises."""
+        try:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+            self._conn.execute("PRAGMA cache_size=2000")  # ~8MB cache
+            self._conn.execute("PRAGMA auto_vacuum=INCREMENTAL")
 
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS point_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mapping_id TEXT NOT NULL,
-                value REAL,
-                value_text TEXT,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS point_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mapping_id TEXT NOT NULL,
+                    value REAL,
+                    value_text TEXT,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_history_mapping_ts
+                ON point_history (mapping_id, timestamp)
+            """)
+
+            # Event log table
+            self._conn.execute("""
+                CREATE TABLE IF NOT EXISTS event_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                    event_type TEXT NOT NULL,
+                    device_id INTEGER,
+                    mapping_id TEXT,
+                    severity TEXT NOT NULL DEFAULT 'info',
+                    message TEXT,
+                    data_json TEXT
+                )
+            """)
+            self._conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_event_type_ts
+                ON event_log (event_type, timestamp)
+            """)
+            self._conn.commit()
+
+            # Get initial record count
+            row = self._conn.execute("SELECT COUNT(*) FROM point_history").fetchone()
+            self._record_count = row[0] if row else 0
+            row2 = self._conn.execute("SELECT COUNT(*) FROM event_log").fetchone()
+            self._event_count = row2[0] if row2 else 0
+            logger.info(
+                "History store initialized: %s (%d records, %d events, %.1f MB)",
+                self._db_path,
+                self._record_count,
+                self._event_count,
+                self._get_db_size_mb(),
             )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_history_mapping_ts
-            ON point_history (mapping_id, timestamp)
-        """)
-
-        # Event log table
-        self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS event_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                event_type TEXT NOT NULL,
-                device_id INTEGER,
-                mapping_id TEXT,
-                severity TEXT NOT NULL DEFAULT 'info',
-                message TEXT,
-                data_json TEXT
+        except Exception as db_err:
+            logger.error(
+                "⛔ History store init FAILED (%s): %s — history/events will be unavailable.",
+                self._db_path, db_err,
             )
-        """)
-        self._conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_event_type_ts
-            ON event_log (event_type, timestamp)
-        """)
-        self._conn.commit()
-
-        # Get initial record count
-        row = self._conn.execute("SELECT COUNT(*) FROM point_history").fetchone()
-        self._record_count = row[0] if row else 0
-        row2 = self._conn.execute("SELECT COUNT(*) FROM event_log").fetchone()
-        self._event_count = row2[0] if row2 else 0
-        logger.info(
-            "History store initialized: %s (%d records, %d events, %.1f MB)",
-            self._db_path,
-            self._record_count,
-            self._event_count,
-            self._get_db_size_mb(),
-        )
+            self._conn = None  # ensure callers see conn=None and skip DB ops
 
     def close(self) -> None:
         if self._cleanup_task:
@@ -145,8 +154,9 @@ class HistoryStore:
             self._conn.commit()
             self._record_count += 1
 
-            # Ring buffer: check per-point count (every 50 inserts to reduce overhead)
-            if self._record_count % 50 == 0:
+            # Ring buffer: check per-point count every 50 inserts of THIS SPECIFIC POINT
+            self._point_insert_counts[mapping_id] = self._point_insert_counts.get(mapping_id, 0) + 1
+            if self._point_insert_counts[mapping_id] % 50 == 0:
                 self._apply_ring_buffer(mapping_id)
 
     def _apply_ring_buffer(self, mapping_id: str) -> None:

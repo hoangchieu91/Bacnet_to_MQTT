@@ -39,14 +39,23 @@ def _jose():
 
 # ── Password helpers — use bcrypt directly (passlib has bcrypt 4.x compat issues) ──
 def hash_password(plain: str) -> str:
-    import bcrypt
-    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+    try:
+        import bcrypt
+        return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+    except ImportError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="bcrypt not installed on server. Run: pip install bcrypt",
+        )
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
         import bcrypt
         return bcrypt.checkpw(plain.encode(), hashed.encode())
+    except ImportError:
+        logger.error("bcrypt not installed — password verification disabled. Run: pip install bcrypt")
+        return False
     except Exception:
         return False
 

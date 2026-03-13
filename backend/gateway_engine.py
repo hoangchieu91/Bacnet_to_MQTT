@@ -123,6 +123,9 @@ class GatewayEngine:
         await asyncio.sleep(delay_s)
         if not self._running:
             return
+        if not self._bacnet._network:
+            logger.warning("[Names] BACnet not connected — skipping name resolution")
+            return
 
         try:
             logger.info("[Names] Calling BAC0 list() to bulk-fetch device names...")
@@ -206,7 +209,7 @@ class GatewayEngine:
                         )
                         try:
                             m.read_mode = "poll"
-                            await self._cm.update_mapping(m.id, {"read_mode": "poll"})
+                            self._cm.update_mapping(m.id, read_mode="poll")
                             # Log event to history
                             if self._history:
                                 self._history.log_event(
@@ -1038,6 +1041,11 @@ class GatewayEngine:
             if not address:
                 failed += 1
                 continue
+
+            # Guard: BACnet must be connected and network available
+            if not self._bacnet._network:
+                logger.warning("[Names] BACnet not connected — aborting name resolution")
+                return
 
             # Already has a real name — skip
             if entry.get("name") and entry["name"] != f"Device {did}":

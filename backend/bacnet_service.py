@@ -1076,6 +1076,7 @@ class BacnetService:
         if not self._connected or self._network is None:
             return False, "BACnet service not started"
 
+        request_str = ""  # pre-init to prevent UnboundLocalError in except block
         try:
             ot = _normalize_type(object_type)
             write_val = value

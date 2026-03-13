@@ -102,6 +102,16 @@ function App() {
     localStorage.getItem('sidebar_collapsed') === 'true'
   );
   const [showMore, setShowMore] = useState(false);
+  // Reactive mobile detection — updates on window resize
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 768
+  );
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   const toggleSidebar = () => setSidebarCollapsed(prev => {
     const next = !prev;
@@ -170,18 +180,10 @@ function App() {
         {/* Main content */}
         <main
           className="min-h-screen overflow-x-hidden transition-all duration-300 pb-20 md:pb-0"
-          style={(() => {
-            // On mobile (< 768px): full width, no sidebar offset
-            if (typeof window !== 'undefined' && window.innerWidth < 768) {
-              return {};
-            }
-            // On desktop: offset by sidebar width exactly like before
-            const sw = sidebarCollapsed ? 64 : 220;
-            return {
-              marginLeft: `${sw}px`,
-              width: `calc(100vw - ${sw}px)`,
-            };
-          })()}
+          style={isMobile ? {} : {
+            marginLeft: `${sidebarCollapsed ? 64 : 220}px`,
+            width: `calc(100vw - ${sidebarCollapsed ? 64 : 220}px)`,
+          }}
         >
 
           {/* slideUp animation for More drawer */}
