@@ -39,6 +39,12 @@ from typing import Callable
 import serial
 import yaml
 
+try:
+    from bacnet_decoder import decode_bacnet_frame, DecodedMessage
+    _HAS_DECODER = True
+except ImportError:
+    _HAS_DECODER = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -343,6 +349,11 @@ class NodeStats:
     bad_crc_frames: int = 0
     consecutive_tokens: int = 0
     device_instances: set[int]  = field(default_factory=set)   # IDs from I-Am
+    vendor_id: int | None = None
+    max_apdu: int | None = None
+    segmentation: int | None = None
+    first_seen: float = 0.0
+    last_seen: float = 0.0
 
     # Derived (filled by analyzer on demand)
     frames_per_sec: float = 0.0
@@ -402,6 +413,10 @@ class MstpHealthAnalyzer:
 
         self.pathologies: list[Pathology] = []
 
+        # BACnet APDU decoded conversations (rolling log)
+        self._conversations: collections.deque[dict] = collections.deque(maxlen=60000)
+        self._on_conversation: Callable[[dict], None] | None = None
+
     # ── Ingest ─────────────────────────────────────────────────────────────
 
     def ingest_frame(self, frame: MstpFrame) -> None:
@@ -431,6 +446,9 @@ class MstpHealthAnalyzer:
 
         # Node stats
         ns = self._nodes.setdefault(frame.src, NodeStats(mac=frame.src))
+        if ns.first_seen == 0.0:
+            ns.first_seen = now
+        ns.last_seen = now
         ns.total_frames += 1
         ns.total_bytes  += frame.raw_len
         ns.frame_types[frame.frame_type] = ns.frame_types.get(frame.frame_type, 0) + 1
@@ -454,32 +472,113 @@ class MstpHealthAnalyzer:
         # BACnet payload analysis (I-Am → extract device instance)
         if frame.is_bacnet and len(frame.data) >= 6:
             self._try_parse_iam(frame)
+            # Decode full APDU for conversation log
+            if _HAS_DECODER:
+                try:
+                    decoded = decode_bacnet_frame(frame.data, frame.src, frame.dst, now)
+                    if decoded and decoded.service:
+                        entry = decoded.to_dict()
+                        # Dedup: chỉ gộp nếu các bản tin giống hệt nhau và CÁCH NHAU < 1 GIÂY (burst/storm)
+                        # Poll bình thường (vd 5s/lần) sẽ giữ nguyên để dễ hình dung luồng
+                        deduped = False
+                        if self._conversations:
+                            last = self._conversations[-1]
+                            if (last.get("src") == entry["src"]
+                                and last.get("dst") == entry["dst"]
+                                and last.get("service") == entry["service"]
+                                and last.get("object") == entry["object"]
+                                and last.get("property") == entry["property"]):
+                                
+                                # Chỉ dedup nếu <= 1s
+                                if entry["ts"] - last["ts"] <= 1.0:
+                                    last["count"] = last.get("count", 1) + 1
+                                    last["ts"] = entry["ts"]  # update to latest ts
+                                    last["value"] = entry.get("value", last.get("value", ""))
+                                    deduped = True
+                        if not deduped:
+                            entry["count"] = 1
+                            self._conversations.append(entry)
+                        # Always broadcast (frontend can dedup independently)
+                        if self._on_conversation:
+                            entry["count"] = self._conversations[-1].get("count", 1) if deduped else 1
+                            self._on_conversation(entry)
+                except Exception:
+                    pass
 
     def _try_parse_iam(self, frame: MstpFrame) -> None:
-        """Heuristic: detect I-Am APDU and extract device instance for dup-ID check."""
+        """Parse I-Am APDU: extract device instance, max_apdu, segmentation, vendor_id.
+
+        I-Am APDU layout (after 0x10 0x00):
+          [tag0] ObjectIdentifier  (4 bytes, tag number 0xC4)
+          [tag1] MaxAPDU           (1-2 bytes unsigned, tag number 0x21 or 0x22)
+          [tag2] Segmentation      (1 byte enum, tag number 0x91)
+          [tag3] VendorID           (1-2 bytes unsigned, tag number 0x21 or 0x22)
+        """
         data = frame.data
-        # APDU: BACnet/MSTP network layer (bytes 0-3) then APDU
-        # Network layer: version(1), ctrl(1), dnet(2), dlen(1), dadr(n), hop(1) or no routing
-        # We just look for the I-Am pattern: Unconfirmed-REQ PDU (0x10), I-Am (0x00)
-        # Skip network layer header (variable) by searching for 0x10 0x00
         for i in range(min(8, len(data) - 2)):
             if data[i] == 0x10 and data[i+1] == 0x00:
-                # I-Am found — next few bytes encode device instance as BACnet tag
-                # Object identifier tag: tag 0, context, length 4
                 offset = i + 2
-                if offset + 4 < len(data):
-                    try:
-                        # BACnet object identifier: upper 10 bits = type (8=device), lower 22 = instance
+                if offset + 4 >= len(data):
+                    break
+                try:
+                    ns = self._nodes[frame.src]
+                    # --- Object Identifier (tag 0xC4, 4 bytes) ---
+                    oid_tag = data[offset]
+                    if oid_tag == 0xC4 and offset + 5 <= len(data):
                         oid_bytes = data[offset+1:offset+5]
                         oid = struct.unpack(">I", oid_bytes)[0]
                         obj_type = (oid >> 22) & 0x3FF
                         instance = oid & 0x3FFFFF
                         if obj_type == 8:  # Device object
                             self._instance_to_macs[instance].add(frame.src)
-                            ns = self._nodes[frame.src]
                             ns.device_instances.add(instance)
-                    except Exception:
-                        pass
+                        offset += 5
+                    else:
+                        # Old fallback: skip tag byte
+                        oid_bytes = data[offset+1:offset+5]
+                        oid = struct.unpack(">I", oid_bytes)[0]
+                        obj_type = (oid >> 22) & 0x3FF
+                        instance = oid & 0x3FFFFF
+                        if obj_type == 8:
+                            self._instance_to_macs[instance].add(frame.src)
+                            ns.device_instances.add(instance)
+                        offset += 5
+
+                    # --- Max APDU Length (application tag unsigned) ---
+                    if offset < len(data):
+                        tag = data[offset]
+                        tag_num = (tag >> 4) & 0x0F
+                        length = tag & 0x07
+                        if tag_num == 2 and length in (1, 2):
+                            if length == 1 and offset + 2 <= len(data):
+                                ns.max_apdu = data[offset+1]
+                                offset += 2
+                            elif length == 2 and offset + 3 <= len(data):
+                                ns.max_apdu = (data[offset+1] << 8) | data[offset+2]
+                                offset += 3
+
+                    # --- Segmentation Supported (application tag enum) ---
+                    if offset < len(data):
+                        tag = data[offset]
+                        tag_num = (tag >> 4) & 0x0F
+                        length = tag & 0x07
+                        if tag_num == 9 and length == 1 and offset + 2 <= len(data):
+                            ns.segmentation = data[offset+1]
+                            offset += 2
+
+                    # --- Vendor ID (application tag unsigned) ---
+                    if offset < len(data):
+                        tag = data[offset]
+                        tag_num = (tag >> 4) & 0x0F
+                        length = tag & 0x07
+                        if tag_num == 2 and length in (1, 2):
+                            if length == 1 and offset + 2 <= len(data):
+                                ns.vendor_id = data[offset+1]
+                            elif length == 2 and offset + 3 <= len(data):
+                                ns.vendor_id = (data[offset+1] << 8) | data[offset+2]
+
+                except Exception:
+                    pass
                 break
 
     # ── Junk bytes from parser ─────────────────────────────────────────────
@@ -654,6 +753,9 @@ class MstpHealthAnalyzer:
                 "token_avg_ms":  round(token_avg, 1) if token_avg is not None else None,
                 "token_max_ms":  round(token_max, 1) if token_max is not None else None,
                 "device_ids":    sorted(ns.device_instances),
+                "vendor_id":     ns.vendor_id,
+                "max_apdu":      ns.max_apdu,
+                "segmentation":  ns.segmentation,
                 "frame_types": {
                     FRAME_TYPE_NAMES.get(ft, hex(ft)): cnt
                     for ft, cnt in ns.frame_types.items()
@@ -836,6 +938,10 @@ class MstpSniffer:
 
     def get_frame_log(self, limit: int = 100) -> list[dict]:
         return self.frame_log[-limit:]
+
+    def get_conversations(self, limit: int = 100) -> list[dict]:
+        """Return last N decoded BACnet conversations."""
+        return list(self.analyzer._conversations)[-limit:]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

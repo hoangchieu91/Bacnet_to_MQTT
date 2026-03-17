@@ -19,6 +19,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import collections
+import time
 import uvicorn
 import yaml
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -33,12 +35,13 @@ logger = logging.getLogger(__name__)
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="MS/TP Tools Dashboard", version="1.0.0")
+app = FastAPI(title="MS/TP Tools Dashboard", version="1.2.0")
 
 _monitor: HealthMonitor | None = None
 _bridge:  MstpBridge | None   = None
 _sniffer: MstpSniffer | None  = None
 _clients: set[WebSocket]       = set()
+_pathology_history: collections.deque = collections.deque(maxlen=2000)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -85,15 +88,24 @@ async def startup() -> None:
     sniffer_cfg = cfg.get("sniffer", {})
     if sniffer_cfg.get("enabled", True):
         def _on_pathology(p: Pathology) -> None:
-            asyncio.create_task(_broadcast({
+            entry = {
                 "type": "pathology",
                 "severity": p.severity,
                 "code": p.code,
                 "description": p.description,
                 "nodes_involved": p.nodes_involved,
+                "ts": time.time(),
+            }
+            _pathology_history.append(entry)
+            asyncio.create_task(_broadcast(entry))
+        def _on_conversation(conv: dict) -> None:
+            asyncio.create_task(_broadcast({
+                "type": "conversation",
+                **conv,
             }))
         try:
             _sniffer = MstpSniffer.from_config(cfg_path, on_pathology=_on_pathology)
+            _sniffer.analyzer._on_conversation = _on_conversation
             await _sniffer.start()
             logger.info("[Dashboard] Sniffer started on serial port (PASSIVE)")
         except Exception as exc:
@@ -124,21 +136,97 @@ async def index() -> FileResponse:
 
 @app.get("/api/nodes")
 async def get_nodes() -> list[dict]:
-    if not _monitor:
+    # Primary: HealthMonitor data (BAC0/scanner)
+    if _monitor:
+        return _monitor.store.get_snapshots()
+    # Fallback: sniffer passive data → populate node grid
+    if _sniffer:
+        return _sniffer_nodes_as_grid()
+    return []
+
+
+# Known BACnet vendor IDs (common in BMS)
+VENDOR_NAMES: dict[int, str] = {
+    5: "Johnson Controls (JCI)",
+    7: "Automated Logic (ALC)",
+    8: "Delta Controls",
+    15: "TAC/Schneider",
+    17: "Honeywell",
+    24: "Alerton",
+    36: "Tridium",
+    95: "Reliable Controls",
+    115: "Cylon Controls",
+    149: "ABI",
+    169: "Distech Controls",
+    260: "KMC Controls",
+    343: "EasyIO",
+    365: "Loytec",
+    389: "Contemporary Controls",
+    400: "Sauter",
+    453: "Phoenix Controls",
+    555: "Beckhoff",
+    624: "Intesis (HMS)",
+    800: "Danfoss",
+}
+
+SEG_NAMES = {0: "Both", 1: "Transmit", 2: "Receive", 3: "None"}
+
+
+def _sniffer_nodes_as_grid() -> list[dict]:
+    """Convert sniffer analyzer node stats into the same shape expected by grid UI."""
+    if not _sniffer:
         return []
-    return _monitor.store.get_snapshots()
+    report = _sniffer.get_report()
+    nodes = []
+    for ns in report.get("nodes", []):
+        mac = ns["mac"]
+        fps = ns.get("frames_per_s", 0)
+        device_ids = ns.get("device_ids", [])
+        vendor_id = ns.get("vendor_id")
+        vendor_name = VENDOR_NAMES.get(vendor_id, f"Vendor {vendor_id}") if vendor_id else "—"
+        dev_label = f"Device {device_ids[0]}" if device_ids else ""
+        nodes.append({
+            "address": mac,
+            "online": True,
+            "name": f"Node {mac}" + (f" ({dev_label})" if dev_label else ""),
+            "vendor": vendor_name,
+            "vendor_id": vendor_id,
+            "model": "—",
+            "rtt_ms": round(ns.get("token_avg_ms") or 0, 1),
+            "frames_per_s": fps,
+            "bad_crc": ns.get("bad_crc", 0),
+            "bad_crc_pct": ns.get("bad_crc_pct", 0),
+            "device_ids": device_ids,
+            "max_apdu": ns.get("max_apdu"),
+            "segmentation": SEG_NAMES.get(ns.get("segmentation"), "—"),
+            "total_frames": ns.get("total_frames", 0),
+            "bytes_per_s": ns.get("bytes_per_s", 0),
+            "token_passes": ns.get("token_passes", 0),
+            "token_avg_ms": ns.get("token_avg_ms"),
+            "token_max_ms": ns.get("token_max_ms"),
+            "frame_types": ns.get("frame_types", {}),
+            "source": "sniffer",
+        })
+    return nodes
 
 
 @app.get("/api/nodes/{node_id}")
 async def get_node(node_id: int) -> dict:
-    if not _monitor:
-        raise HTTPException(status_code=503)
-    snapshots = {s["address"]: s for s in _monitor.store.get_snapshots()}
-    node = snapshots.get(node_id)
-    if not node:
-        raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
-    events = _monitor.store.get_events(limit=50, node_id=node_id)
-    return {**node, "events": events}
+    # Primary: HealthMonitor
+    if _monitor:
+        snapshots = {s["address"]: s for s in _monitor.store.get_snapshots()}
+        node = snapshots.get(node_id)
+        if not node:
+            raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
+        events = _monitor.store.get_events(limit=50, node_id=node_id)
+        return {**node, "events": events}
+    # Fallback: sniffer
+    if _sniffer:
+        nodes = {n["address"]: n for n in _sniffer_nodes_as_grid()}
+        node = nodes.get(node_id)
+        if node:
+            return node
+    raise HTTPException(status_code=404, detail=f"Node {node_id} not found")
 
 
 @app.get("/api/events")
@@ -146,6 +234,17 @@ async def get_events(limit: int = 100, node_id: int | None = None) -> list[dict]
     if not _monitor:
         return []
     return _monitor.store.get_events(limit=limit, node_id=node_id)
+
+
+@app.get("/api/conversations")
+async def get_conversations(limit: int = 200, node: int | None = None) -> list[dict]:
+    """Return decoded BACnet APDU conversations from sniffer."""
+    if not _sniffer:
+        return []
+    convos = _sniffer.get_conversations(limit=limit)
+    if node is not None:
+        convos = [c for c in convos if c.get("src") == node or c.get("dst") == node]
+    return convos
 
 
 @app.get("/api/stats")
@@ -157,12 +256,29 @@ async def get_stats() -> dict:
     return stats
 
 
+@app.get("/api/pathologies")
+async def get_pathologies() -> list[dict]:
+    """Return recent pathology events (server-side history, survives page reload)."""
+    return list(_pathology_history)
+
+
 @app.post("/api/scan")
 async def trigger_scan() -> dict:
     if not _monitor:
-        raise HTTPException(status_code=503)
+        raise HTTPException(status_code=503, detail="Scanner unavailable — running in sniffer-only mode")
     asyncio.create_task(_monitor._scan_cycle())
     return {"status": "scan triggered"}
+
+
+@app.get("/api/mode")
+async def get_mode() -> dict:
+    """Return current operating mode so UI can adapt."""
+    return {
+        "scanner_active": _monitor is not None,
+        "sniffer_active": _sniffer is not None and _sniffer._running,
+        "bridge_active": _bridge is not None,
+        "mode": "full" if _monitor else ("sniffer" if _sniffer else "offline"),
+    }
 
 
 @app.get("/api/bridge/values")

@@ -6,10 +6,10 @@
 <title>MS/TP Tools Dashboard</title>
 <style>
 :root{
-  --bg:#0d111a;--surface:#161c2a;--surface2:#1e2740;--border:#2a3245;
-  --text:#e2e8f0;--muted:#64748b;--accent:#38bdf8;
-  --green:#22c55e;--red:#ef4444;--yellow:#f59e0b;--orange:#f97316;
-  --purple:#a855f7;--radius:8px;
+  --bg:#0a0f1a;--surface:#111827;--surface2:#1f2937;--border:#374151;
+  --text:#f9fafb;--muted:#9ca3af;--accent:#38bdf8;
+  --green:#34d399;--red:#fb7185;--yellow:#fbbf24;--orange:#fb923c;
+  --purple:#a78bfa;--radius:8px;
 }
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;min-height:100vh;}
@@ -73,7 +73,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 /* ── Cards ───────────────────────────────────── */
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:14px;}
 .card-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:12px;}
-.two-col{display:grid;grid-template-columns:1fr 320px;gap:14px;}
+.two-col{display:grid;grid-template-columns:1fr 1.5fr;gap:14px;}
 @media(max-width:900px){.two-col{grid-template-columns:1fr;}}
 
 /* ── Stats row ───────────────────────────────── */
@@ -88,13 +88,28 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 
 /* ── Node Grid ───────────────────────────────── */
 .grid{display:grid;grid-template-columns:repeat(16,1fr);gap:3px;}
-.cell{aspect-ratio:1;border-radius:3px;cursor:pointer;background:#1a2136;
-  border:1px solid #252f48;transition:all .15s;display:flex;align-items:center;
-  justify-content:center;font-size:8px;font-weight:700;color:transparent;}
-.cell:hover{border-color:var(--accent);color:var(--text);}
-.cell.online{background:#14532d;border-color:var(--green);color:#86efac;}
-.cell.offline{background:#450a0a;border-color:var(--red);color:#fca5a5;}
+.cell{height:28px;border-radius:4px;cursor:pointer;background:#1a2236;
+  border:1px solid #2d3a52;transition:all .15s;display:flex;align-items:center;
+  justify-content:center;font-size:9px;font-weight:700;color:#4b5e7a;}
+.cell:hover{border-color:var(--accent);color:var(--text);background:#253352;}
+.cell.online{background:#065f46;border-color:#34d399;color:#a7f3d0;box-shadow:0 0 6px rgba(52,211,153,0.25);}
+.cell.offline{background:#7f1d1d;border-color:#fb7185;color:#fecdd3;box-shadow:0 0 6px rgba(251,113,133,0.25);}
 .cell.selected{outline:2px solid var(--accent);outline-offset:1px;}
+.cell{position:relative;}
+.cell-badge{position:absolute;top:-4px;right:-4px;font-size:8px;line-height:1;
+  min-width:14px;height:14px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-weight:900;z-index:3;cursor:help;pointer-events:none;}
+.cell-badge.warn{background:#f59e0b;color:#000;box-shadow:0 0 6px rgba(245,158,11,0.5);}
+.cell-badge.crit{background:#f43f5e;color:#fff;box-shadow:0 0 6px rgba(244,63,94,0.5);animation:pulse-badge 1.5s infinite;}
+@keyframes pulse-badge{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.7;transform:scale(1.2);}}
+.legend{display:flex;gap:12px;margin-bottom:8px;font-size:11px;}
+.leg{display:flex;align-items:center;gap:5px;}
+.leg-sq{width:10px;height:10px;border-radius:2px;}
+.mode-badge{display:inline-block;font-size:10px;padding:3px 10px;border-radius:99px;
+  font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-left:8px;}
+.mode-badge.full{background:rgba(52,211,153,0.15);color:var(--green);border:1px solid rgba(52,211,153,0.3);}
+.mode-badge.sniffer{background:rgba(56,189,248,0.15);color:var(--accent);border:1px solid rgba(56,189,248,0.3);}
+.mode-badge.offline{background:rgba(251,113,133,0.15);color:var(--red);border:1px solid rgba(251,113,133,0.3);}
 .legend{display:flex;gap:12px;margin-bottom:8px;font-size:11px;}
 .leg{display:flex;align-items:center;gap:5px;}
 .leg-sq{width:10px;height:10px;border-radius:2px;}
@@ -104,6 +119,41 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .ev{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;
   border-radius:5px;background:#0f1623;border:1px solid #1e263a;font-size:11px;}
 .ev-time{color:var(--muted);font-size:10px;white-space:nowrap;}
+.ev-filter-bar{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;}
+.ev-filter-btn{font-size:10px;padding:3px 10px;border-radius:99px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);cursor:pointer;transition:.2s;}
+.ev-filter-btn:hover{border-color:var(--accent);color:var(--text);}
+.ev-filter-btn.active{background:rgba(56,189,248,0.15);border-color:var(--accent);color:var(--accent);font-weight:700;}
+.ft-bar{display:flex;height:14px;border-radius:4px;overflow:hidden;margin:6px 0;}
+.ft-seg{height:100%;min-width:2px;position:relative;cursor:help;}
+.ft-seg:hover::after{content:attr(data-label);position:absolute;bottom:110%;left:50%;transform:translateX(-50%);
+  background:#000;color:#fff;padding:2px 6px;border-radius:3px;font-size:9px;white-space:nowrap;z-index:10;}
+.detail-section{margin-top:10px;padding-top:8px;border-top:1px solid var(--border);}
+.detail-section-title{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:6px;}
+
+/* ── Bus Conversations ──────────────────── */
+.conv-panel{margin-top:16px;}
+.conv-row{display:flex;gap:6px;align-items:flex-start;padding:5px 8px;border-radius:4px;
+  font-size:10.5px;font-family:'JetBrains Mono',monospace;border-bottom:1px solid #1a2235;}
+.conv-row:hover{background:#131b2e;}
+.conv-ts{color:var(--muted);white-space:nowrap;flex-shrink:0;width:72px;}
+.conv-arrow{color:var(--accent);flex-shrink:0;}
+.conv-src,.conv-dst{color:var(--green);font-weight:700;min-width:40px;}
+.conv-svc{font-weight:700;min-width:100px;}
+.conv-svc.read{color:#38bdf8;} .conv-svc.write{color:#f59e0b;}
+.conv-svc.iam{color:#a78bfa;} .conv-svc.whois{color:#e879f9;}
+.conv-svc.cov{color:#34d399;} .conv-svc.ack{color:#10b981;}
+.conv-svc.error{color:#f43f5e;} .conv-svc.other{color:var(--muted);}
+.conv-obj{color:#fbbf24;}
+.conv-prop{color:var(--text);}
+.conv-val{color:#a5f3fc;font-weight:600;}
+.conv-count{font-size:9px;color:#000;background:#f59e0b;border-radius:99px;padding:1px 5px;
+  font-weight:700;min-width:18px;text-align:center;}
+.conv-feed{max-height:700px;overflow-y:auto;}
+.conv-toolbar{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
+.conv-toolbar input,.conv-toolbar select{font-size:10px;padding:3px 8px;border-radius:4px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);}
+.conv-counter{font-size:10px;color:var(--muted);margin-left:auto;}
 
 /* ── Pathologies ─────────────────────────────── */
 .path-list{display:flex;flex-direction:column;gap:8px;}
@@ -144,14 +194,16 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .cfg-section{font-size:11px;color:var(--muted);margin-bottom:6px;font-weight:700;text-transform:uppercase;}
 
 /* ── Buttons ─────────────────────────────────── */
-.btn{background:linear-gradient(135deg,#0ea5e9,#6366f1);color:#fff;
+.btn{background:var(--accent);color:#fff;
   border:none;border-radius:6px;padding:8px 16px;font-size:12px;
-  font-weight:700;cursor:pointer;transition:opacity .2s;white-space:nowrap;}
+  font-weight:700;cursor:pointer;transition:all .2s;white-space:nowrap;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);}
 .btn:disabled{opacity:.4;cursor:default;}
-.btn:hover:not(:disabled){opacity:.85;}
+.btn:hover:not(:disabled){filter: brightness(1.1); transform: translateY(-1px);}
+.btn-active{background:var(--accent); color: white;}
 .btn-sm{padding:5px 12px;font-size:11px;}
-.btn-danger{background:linear-gradient(135deg,#dc2626,#7f1d1d);}
-.btn-success{background:linear-gradient(135deg,#16a34a,#065f46);}
+.btn-danger{background:var(--red);}
+.btn-success{background:var(--green);}
 .badge{font-size:10px;padding:2px 7px;border-radius:99px;font-weight:700;}
 
 /* ── Detail panel ────────────────────────────── */
@@ -171,7 +223,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 
 /* ── About page ──────────────────────────── */
 .about-hero{text-align:center;padding:40px 20px 30px;}
-.about-hero h2{font-size:1.6rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#a855f7);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;}
+.about-hero h2{font-size:1.6rem;font-weight:800;background:linear-gradient(135deg,var(--accent),#8b5cf6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-bottom:8px;}
 .about-hero p{color:var(--muted);font-size:13px;max-width:600px;margin:0 auto;line-height:1.6;}
 .about-section{margin-bottom:24px;}
 .about-section h3{font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:8px;}
@@ -252,7 +304,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   <div class="sbar-item">🔌 Nodes: <span id="sbar-nodes">—</span></div>
   <div class="sbar-item">🔄 Token: <span id="sbar-token">—</span></div>
   <div class="sbar-item">⏱ <span id="sbar-uptime">—</span></div>
-  <div class="sbar-item" style="margin-left:auto;">🔌 MS/TP Tools v1.3</div>
+  <div class="sbar-item" style="margin-left:auto;">🔌 MS/TP Tools v1.2.0</div>
 </div>
 
 <!-- ══════════ TAB: MONITOR ══════════ -->
@@ -263,14 +315,16 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
     <div class="stat"><div class="stat-val" id="sTotal">—</div><div class="stat-lbl">Total Nodes</div></div>
     <div class="stat"><div class="stat-val" id="sScan">0</div><div class="stat-lbl">Scans</div></div>
   </div>
+  <!-- Mode indicator -->
+  <div id="modeIndicator" style="margin-bottom:10px;"></div>
   <div class="two-col">
     <div>
       <div class="card">
         <div class="card-title">Node Grid (MS/TP 0–127)</div>
         <div class="legend">
-          <div class="leg"><div class="leg-sq" style="background:#14532d;border:1px solid var(--green)"></div> Online</div>
-          <div class="leg"><div class="leg-sq" style="background:#450a0a;border:1px solid var(--red)"></div> Offline</div>
-          <div class="leg"><div class="leg-sq" style="background:#1a2136;border:1px solid #252f48"></div> Unknown</div>
+          <div class="leg"><div class="leg-sq" style="background:rgba(16,185,129,0.2);border:1px solid var(--green)"></div> Online</div>
+          <div class="leg"><div class="leg-sq" style="background:rgba(244,63,94,0.2);border:1px solid var(--red)"></div> Offline</div>
+          <div class="leg"><div class="leg-sq" style="background:var(--surface2);border:1px solid var(--border)"></div> Unknown</div>
         </div>
         <div class="grid" id="nodeGrid"></div>
       </div>
@@ -281,8 +335,51 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
         <div style="font-size:12px;color:var(--muted)">Click node to view</div>
       </div>
       <div class="card">
-        <div class="card-title">Event Feed</div>
+        <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+          <span>Event Feed</span>
+          <button class="btn btn-sm" onclick="clearEventFeed()" style="font-size:10px;padding:2px 8px">🗑 Clear</button>
+        </div>
+        <div class="ev-filter-bar" id="evFilterBar">
+          <button class="ev-filter-btn active" data-node="all" onclick="setEventFilter(null)">All</button>
+        </div>
         <div class="feed" id="eventFeed"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bus Conversations Panel -->
+  <div class="conv-panel">
+    <div class="card">
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+        <span>💬 Bus Conversations — BACnet APDU Decoder</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span class="conv-counter" id="convCounter">0 messages</span>
+          <button class="btn btn-sm" onclick="clearConversations()" style="font-size:10px;padding:2px 8px">🗑</button>
+          <button class="btn btn-sm" id="convPauseBtn" onclick="toggleConvPause()" style="font-size:10px;padding:2px 8px">⏸</button>
+        </div>
+      </div>
+      <div class="conv-toolbar">
+        <select id="convNodeFilter" onchange="renderConversations()">
+          <option value="">All Nodes</option>
+        </select>
+        <select id="convSvcFilter" onchange="renderConversations()">
+          <option value="">All Services</option>
+          <option value="ReadProperty">ReadProperty</option>
+          <option value="WriteProperty">WriteProperty</option>
+          <option value="ReadPropertyMultiple">ReadPropMultiple</option>
+          <option value="WritePropertyMultiple">WritePropMultiple</option>
+          <option value="SubscribeCOV">SubscribeCOV</option>
+          <option value="COV-Notification">COV Notification</option>
+          <option value="I-Am">I-Am</option>
+          <option value="Who-Is">Who-Is</option>
+        </select>
+        <input type="text" id="convSearch" placeholder="🔍 Search..." oninput="renderConversations()" style="width:120px">
+      </div>
+      <div class="conv-feed" id="convFeed">
+        <div style="font-size:11px;color:var(--muted);padding:20px;text-align:center">
+          ⏳ Đang chờ BACnet data frames...<br>
+          <span style="font-size:10px">Sniffer đang nghe passive trên bus. Khi có device gửi ReadProperty, WriteProperty, COV... sẽ hiện ở đây.</span>
+        </div>
       </div>
     </div>
   </div>
@@ -694,10 +791,63 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
-const state = { nodes:{}, selected:null };
+const state = { nodes:{}, selected:null, mode:'offline', eventFilter:null };
 let ws = null;
+let _snifferPollTimer = null;
+let _allEvents = [];  // store all events for filtering
 
-// ── Tabs ──────────────────────────────────────────────────────────────────────
+// Pathology tracking per node: mac → [{code, severity, description}]
+const nodeIssues = {};  // accumulated from WS pathology events
+
+function _computeLocalIssues(mac) {
+  // Compute issues from node stats (even without WS pathology)
+  const n = state.nodes[mac];
+  if (!n) return [];
+  const issues = [];
+  if (n.frames_per_s > 20) issues.push({code:'CHATTY_NODE', severity:'warning', short:'Nói quá nhiều (' + n.frames_per_s + ' fps)'});
+  if (n.bad_crc > 0 && n.bad_crc_pct > 2) issues.push({code:'HIGH_CRC_ERRORS', severity:'critical', short:'CRC lỗi cao (' + n.bad_crc_pct + '%)'});
+  if (n.token_max_ms > 200) issues.push({code:'TOKEN_IMBALANCE', severity:'warning', short:'Token hold quá lâu (' + n.token_max_ms + 'ms)'});
+  return issues;
+}
+
+function getNodeIssues(mac) {
+  const fromWs = nodeIssues[mac] || [];
+  const local = _computeLocalIssues(mac);
+  // Deduplicate by code
+  const seen = new Set(fromWs.map(i=>i.code));
+  return [...fromWs, ...local.filter(i=>!seen.has(i.code))];
+}
+
+// Vendor name lookup (client-side)
+const VENDORS = {
+  5:'Johnson Controls (JCI)', 7:'Automated Logic (ALC)', 8:'Delta Controls',
+  15:'TAC/Schneider', 17:'Honeywell', 24:'Alerton', 36:'Tridium',
+  95:'Reliable Controls', 115:'Cylon Controls', 149:'ABI',
+  169:'Distech Controls', 260:'KMC Controls', 343:'EasyIO', 365:'Loytec',
+  389:'Contemporary Controls', 400:'Sauter', 453:'Phoenix Controls',
+  555:'Beckhoff', 624:'Intesis (HMS)', 800:'Danfoss'
+};
+
+const SEG_LABELS = {0:'Both (TX+RX)', 1:'Transmit only', 2:'Receive only', 3:'None'};
+
+const FT_COLORS = {
+  'Token':'#8b5cf6','PollForMaster':'#f59e0b','ReplyToPoll':'#10b981',
+  'BACnet-XR':'#38bdf8','BACnet-NXR':'#06b6d4','ReplyPostponed':'#e879f9',
+  'TestReq':'#f43f5e','TestResp':'#fb923c'
+};
+
+// Pathology rule descriptions — 100% logic, no AI needed
+const DIAG_RULES = {
+  'CHATTY_NODE':       { icon:'📢', title:'Node phát quá nhiều frame', fix:'Kiểm tra firmware thiết bị. Có thể thiết bị đang liên tục broadcast không cần thiết. Giảm poll frequency hoặc enable COV.' },
+  'DUPLICATE_DEVICE_ID':{ icon:'⚠️', title:'Trùng Device Instance ID', fix:'Hai hoặc nhiều node cùng khai báo 1 Device Instance → routing sẽ sai. Đổi Instance ID trên 1 trong các thiết bị bị trùng.' },
+  'HIGH_CRC_ERRORS':   { icon:'🔧', title:'Lỗi CRC cao — tín hiệu bus kém', fix:'Kiểm tra: (1) Resistor termination 120Ω ở 2 đầu bus, (2) Chiều dài cáp, (3) Baud rate có đúng không, (4) Connector có bị lỏng không.' },
+  'JUNK_BYTES':        { icon:'🗑️', title:'Dữ liệu rác trên bus', fix:'Nguyên nhân: baud rate sai, nhiễu điện, hoặc thiết bị ngoài MS/TP cùng bus. Thử đổi baud rate hoặc cách ly dây tín hiệu.' },
+  'TOKEN_IMBALANCE':   { icon:'⚖️', title:'Node giữ token quá lâu', fix:'Thiết bị có thể đang xử lý nặng trước khi pass token. Giá trị bình thường: <50ms. Kiểm tra firmware hoặc cấu hình Max Info Frames.' },
+  'HIGH_BUS_UTILIZATION':{ icon:'📊', title:'Bus quá tải', fix:'Giảm poll frequency, tăng baud rate, hoặc dùng COV (Change of Value) thay vì polling liên tục.' },
+  'PFM_STORM':         { icon:'🌀', title:'Poll-For-Master storm — xung đột địa chỉ', fix:'Node gửi liên tục PollForMaster → có thể đang cố chiếm address đã có node khác dùng. Kiểm tra cấu hình MAC address trên tất cả thiết bị.' },
+  'BUS_SILENCE':       { icon:'🔇', title:'Bus im lặng bất thường', fix:'Không có frame nào trong thời gian dài. Kiểm tra: (1) Cáp có bị đứt không, (2) Thiết bị có mất nguồn không, (3) Token ring có bị collapse không.' },
+};
+
 // ── Tabs (grouped dropdown navigation) ────────────────────────────────────────
 const TAB_GROUP_MAP = {
   monitor:'diag', sniffer:'diag',
@@ -758,14 +908,15 @@ function updateStatusBar() {
   }
   const secs = Math.floor((Date.now() - _startTime) / 1000);
   document.getElementById('sbar-uptime').textContent = `${Math.floor(secs/3600)}h ${Math.floor((secs%3600)/60)}m`;
+  document.getElementById('sbar-nodes').textContent = Object.values(state.nodes).filter(n=>n.online).length;
 }
-setInterval(updateStatusBar, 10000);
+setInterval(updateStatusBar, 5000);
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 function connect(){
   const proto = location.protocol==='https:'?'wss':'ws';
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = ()=> document.getElementById('wsStatus').classList.add('ok');
+  ws.onopen = ()=> { document.getElementById('wsStatus').classList.add('ok'); loadServerHistory(); };
   ws.onclose = ()=>{ document.getElementById('wsStatus').classList.remove('ok'); setTimeout(connect,3000); };
   ws.onmessage = e=>{
     const msg = JSON.parse(e.data);
@@ -783,16 +934,78 @@ function connect(){
       updateStats(msg);
     } else if(msg.type==='pathology'){
       addPathologyEvent(msg);
+      // Track per-node issues for grid badges
+      if(msg.nodes_involved && msg.nodes_involved.length) {
+        msg.nodes_involved.forEach(mac => {
+          if(!nodeIssues[mac]) nodeIssues[mac] = [];
+          // Add if not already present
+          if(!nodeIssues[mac].find(i=>i.code===msg.code)) {
+            nodeIssues[mac].push({code:msg.code, severity:msg.severity, description:msg.description, short:msg.description});
+          }
+        });
+      }
+    } else if(msg.type==='conversation'){
+      addConversation(msg);
     }
     renderGrid();
   };
 }
 
+// ── Server History Load (persists across page reload) ────────────────────────
+async function loadServerHistory() {
+  try {
+    const [convos, pathos] = await Promise.all([
+      fetch('/api/conversations').then(r => r.json()),
+      fetch('/api/pathologies').then(r => r.json()),
+    ]);
+    // Load conversations (oldest first → reverse to put newest first)
+    if (convos.length && !_allConversations.length) {
+      _allConversations = convos.reverse();
+      renderConversations();
+      // Populate node filter dropdown
+      const seen = new Set();
+      convos.forEach(c => {
+        [c.src, c.dst].forEach(mac => {
+          if (mac != null && !seen.has(mac)) {
+            seen.add(mac);
+            const sel = document.getElementById('convNodeFilter');
+            if (![...sel.options].some(o => o.value === String(mac))) {
+              const opt = document.createElement('option');
+              opt.value = String(mac);
+              opt.textContent = `MAC ${mac}`;
+              sel.appendChild(opt);
+            }
+          }
+        });
+      });
+    }
+    // Load pathology history
+    if (pathos.length) {
+      pathos.forEach(p => {
+        addPathologyEvent(p);
+        // Track per-node issues for grid badges
+        if (p.nodes_involved && p.nodes_involved.length) {
+          p.nodes_involved.forEach(mac => {
+            if (!nodeIssues[mac]) nodeIssues[mac] = [];
+            if (!nodeIssues[mac].find(i => i.code === p.code)) {
+              nodeIssues[mac].push({code: p.code, severity: p.severity, description: p.description, short: p.description});
+            }
+          });
+        }
+      });
+      renderGrid();
+    }
+  } catch (e) { console.warn('Failed to load server history:', e); }
+}
+
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function updateStats(s){
-  document.getElementById('sOnline').textContent  = s.online_nodes ??'—';
-  document.getElementById('sOffline').textContent = s.offline_nodes??'—';
-  document.getElementById('sTotal').textContent   = s.total_nodes  ??'—';
+  const online = s.online_nodes ?? Object.values(state.nodes).filter(n=>n.online).length;
+  const total = s.total_nodes ?? Object.keys(state.nodes).length;
+  const offline = s.offline_nodes ?? (total - online);
+  document.getElementById('sOnline').textContent  = online;
+  document.getElementById('sOffline').textContent = offline;
+  document.getElementById('sTotal').textContent   = total;
   if(s.scan_count!=null) document.getElementById('sScan').textContent=s.scan_count;
 }
 
@@ -807,8 +1020,33 @@ function renderGrid(){
     const d=document.createElement('div');
     d.className=`cell ${c} ${sel}`;
     d.textContent=i;
-    d.title=n?`${i}: ${n.name||'?'}`:String(i);
-    d.onclick=()=>{state.selected=state.selected===i?null:i;renderGrid();renderDetail(i);};
+
+    // Pathology badges
+    const issues = n ? getNodeIssues(i) : [];
+    if(issues.length > 0){
+      const worst = issues.find(i=>i.severity==='critical') ? 'crit' : 'warn';
+      const badge = document.createElement('span');
+      badge.className = `cell-badge ${worst}`;
+      badge.textContent = '⚠';
+      badge.title = issues.map(i=> `[${i.code}] ${i.short||i.description||''}`).join('\n');
+      d.appendChild(badge);
+      d.title = `MAC ${i}:\n` + issues.map(i=> `⚠ ${i.short||i.description}`).join('\n');
+    } else {
+      d.title=n?`MAC ${i}: ${n.name||'?'} ${n.frames_per_s?'('+n.frames_per_s+' fps)':''}`:String(i);
+    }
+
+    d.onclick=()=>{
+      state.selected=state.selected===i?null:i;
+      renderGrid();
+      if(state.selected!==null) {
+        renderDetail(i);
+      } else {
+        // Deselected → reset conversation filter to All
+        document.getElementById('convNodeFilter').value = '';
+        renderConversations();
+        setEventFilter(null);
+      }
+    };
     g.appendChild(d);
   }
 }
@@ -816,30 +1054,278 @@ function renderGrid(){
 function renderDetail(id){
   const p=document.getElementById('detailCard');
   const n=state.nodes[id];
-  if(!n){p.innerHTML=`<div class="card-title">Node ${id}</div><div style="font-size:12px;color:var(--muted)">No data</div>`;return;}
-  const rows=[['Address',n.address],['Name',n.name||'—'],['Vendor',n.vendor||'—'],
-    ['Model',n.model||'—'],['RTT',n.rtt_ms>=0?`${n.rtt_ms}ms`:'—'],
-    ['Status',n.online?'🟢 Online':'🔴 Offline']];
-  p.innerHTML=`<div class="card-title">Node ${id}</div>`+
-    rows.map(([k,v])=>`<div class="detail-row"><span class="detail-key">${k}</span><span>${v}</span></div>`).join('');
+  if(!n){p.innerHTML=`<div class="card-title">Node ${id}</div><div style="font-size:12px;color:var(--muted)">Không có dữ liệu — node chưa xuất hiện trên bus</div>`;return;}
+
+  // Resolve vendor name
+  const vendorId = n.vendor_id;
+  const vendorName = vendorId!=null ? (VENDORS[vendorId] || `Unknown (ID: ${vendorId})`) : (n.vendor||'—');
+  const devIds = n.device_ids||[];
+  const segText = n.segmentation || (n.segmentation===0 ? SEG_LABELS[0] : '—');
+
+  const rows = [
+    ['Status',    n.online?'🟢 Online':'🔴 Offline'],
+    ['MAC Address', n.address],
+    ['BACnet Device ID', devIds.length ? devIds.join(', ') : '— (chưa nhận I-Am)'],
+    ['Vendor',    vendorName],
+    ['Max APDU',  n.max_apdu ? `${n.max_apdu} bytes` : '—'],
+    ['Segmentation', segText],
+    ['Frames/s',  n.frames_per_s != null ? n.frames_per_s : '—'],
+    ['Total Frames', n.total_frames ?? '—'],
+    ['Bandwidth', n.bytes_per_s ? `${(n.bytes_per_s*8/1000).toFixed(1)} kbps` : '—'],
+    ['Bad CRC',   `${n.bad_crc??0}${n.bad_crc_pct>0?' ('+n.bad_crc_pct+'%)':''}`],
+    ['Token Hold (avg)', n.token_avg_ms!=null ? `${n.token_avg_ms}ms` : '—'],
+    ['Token Hold (max)', n.token_max_ms!=null ? `${n.token_max_ms}ms` : '—'],
+    ['Data Source', n.source||'scanner'],
+  ];
+
+  let html = `<div class="card-title">Node ${id}${devIds.length?' — Device '+devIds[0]:''}</div>`;
+  html += rows.map(([k,v])=>`<div class="detail-row"><span class="detail-key">${k}</span><span>${v}</span></div>`).join('');
+
+  // Frame type bar chart
+  const ft = n.frame_types||{};
+  const ftTotal = Object.values(ft).reduce((a,b)=>a+b, 0);
+  if(ftTotal>0){
+    html += `<div class="detail-section"><div class="detail-section-title">Frame Types</div>`;
+    html += `<div class="ft-bar">`;
+    for(const [type,cnt] of Object.entries(ft)){
+      const pct = (cnt/ftTotal*100);
+      const color = FT_COLORS[type]||'#6b7280';
+      html += `<div class="ft-seg" style="width:${pct}%;background:${color}" data-label="${type}: ${cnt} (${pct.toFixed(0)}%)"></div>`;
+    }
+    html += `</div>`;
+    html += `<div style="display:flex;flex-wrap:wrap;gap:8px;font-size:10px">`;
+    for(const [type,cnt] of Object.entries(ft)){
+      const color = FT_COLORS[type]||'#6b7280';
+      html += `<span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:${color};margin-right:3px"></span>${type}: ${cnt}</span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Quick help
+  html += `<div class="detail-section"><div class="detail-section-title">Giải thích</div>
+    <div style="font-size:10px;color:var(--muted);line-height:1.6">
+      <b>Token Hold</b>: Thời gian node giữ token trước khi truyền đi. Bình thường &lt;50ms.<br>
+      <b>Frames/s</b>: Số frame gửi mỗi giây. &gt;20 fps là cao bất thường.<br>
+      <b>Bad CRC</b>: Frame bị lỗi checksum — thường do nhiễu hoặc cáp kém.<br>
+      <b>PollForMaster</b>: Frame tìm node mới trên bus. Quá nhiều PFM = xung đột địa chỉ.<br>
+      <b>BACnet-XR</b>: Frame dữ liệu cần xác nhận (Confirmed Request).<br>
+      <b>BACnet-NXR</b>: Frame dữ liệu không cần xác nhận (I-Am, COV...).
+    </div>
+  </div>`;
+
+  p.innerHTML = html;
+
+  // Also filter events and conversations to this node
+  setEventFilter(id);
+  // Set conversation filter dropdown to this node
+  const convSel = document.getElementById('convNodeFilter');
+  // Ensure option exists
+  const optExists = [...convSel.options].some(o => o.value === String(id));
+  if (!optExists) {
+    const opt = document.createElement('option');
+    opt.value = String(id);
+    const devLabel = devIds.length ? ` (Dev ${devIds[0]})` : '';
+    opt.textContent = `MAC ${id}${devLabel}`;
+    convSel.appendChild(opt);
+  }
+  convSel.value = String(id);
+  renderConversations();
+}
+
+// ── Event Filter ─────────────────────────────────────────────────────────────
+function setEventFilter(nodeId){
+  state.eventFilter = nodeId;
+  // Update filter bar active state
+  document.querySelectorAll('.ev-filter-btn').forEach(b=>b.classList.remove('active'));
+  if(nodeId===null){
+    document.querySelector('.ev-filter-btn[data-node="all"]')?.classList.add('active');
+  } else {
+    document.querySelector(`.ev-filter-btn[data-node="${nodeId}"]`)?.classList.add('active');
+  }
+  renderFilteredEvents();
+}
+
+function renderFilteredEvents(){
+  const feed = document.getElementById('eventFeed');
+  feed.innerHTML = '';
+  const filtered = state.eventFilter===null
+    ? _allEvents
+    : _allEvents.filter(ev => ev._nodes && ev._nodes.includes(state.eventFilter));
+  filtered.slice(0, 60).forEach(ev => feed.appendChild(ev._el.cloneNode(true)));
+}
+
+function updateFilterBar(){
+  const bar = document.getElementById('evFilterBar');
+  const knownNodes = new Set();
+  _allEvents.forEach(ev => (ev._nodes||[]).forEach(n => knownNodes.add(n)));
+  // Keep existing buttons, add new ones
+  const existing = new Set([...bar.querySelectorAll('.ev-filter-btn')].map(b=>b.dataset.node));
+  knownNodes.forEach(mac => {
+    if(!existing.has(String(mac))){
+      const btn = document.createElement('button');
+      btn.className = 'ev-filter-btn';
+      btn.dataset.node = String(mac);
+      const n = state.nodes[mac];
+      const label = n && n.device_ids?.length ? `MAC ${mac} (Dev ${n.device_ids[0]})` : `MAC ${mac}`;
+      btn.textContent = label;
+      btn.onclick = () => setEventFilter(parseInt(mac));
+      bar.appendChild(btn);
+    }
+  });
+}
+
+function clearEventFeed(){
+  _allEvents = [];
+  document.getElementById('eventFeed').innerHTML = '';
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
 function addEvent(ev){
-  const feed=document.getElementById('eventFeed');
   const icon=ev.type==='online'?'🟢':'🔴';
   const time=new Date(ev.timestamp*1000).toLocaleTimeString();
   const el=document.createElement('div');el.className='ev';
   el.innerHTML=`<span>${icon}</span><div><div style="font-size:11px">Node <b>${ev.node_id}</b> ${ev.type}${ev.name?' — '+ev.name:''}</div><div class="ev-time">${time}</div></div>`;
-  feed.prepend(el);while(feed.children.length>60)feed.removeChild(feed.lastChild);
+  const evObj = { _el: el, _nodes: [ev.node_id], type: ev.type };
+  _allEvents.unshift(evObj);
+  while(_allEvents.length>100) _allEvents.pop();
+  updateFilterBar();
+  renderFilteredEvents();
 }
 
 function addPathologyEvent(ev){
-  const feed=document.getElementById('eventFeed');
   const icons={'critical':'🔴','warning':'🟡','info':'🔵'};
+  const rule = DIAG_RULES[ev.code]||{};
   const el=document.createElement('div');el.className='ev';
-  el.innerHTML=`<span>${icons[ev.severity]||'•'}</span><div><div style="font-size:11px"><b>[${ev.code}]</b> ${ev.description}</div><div class="ev-time">${new Date().toLocaleTimeString()}</div></div>`;
-  feed.prepend(el);while(feed.children.length>60)feed.removeChild(feed.lastChild);
+  el.innerHTML=`<span>${icons[ev.severity]||'•'}</span><div><div style="font-size:11px"><b>[${ev.code}]</b> ${ev.description}</div>${rule.fix?`<div style="font-size:10px;color:var(--yellow);margin-top:2px">💡 ${rule.fix}</div>`:''}<div class="ev-time">${new Date().toLocaleTimeString()}</div></div>`;
+  const evObj = { _el: el, _nodes: ev.nodes_involved||[], type: 'pathology' };
+  _allEvents.unshift(evObj);
+  while(_allEvents.length>100) _allEvents.pop();
+  updateFilterBar();
+  renderFilteredEvents();
+}
+
+// ── Bus Conversations ────────────────────────────────────────────────────────
+let _allConversations = [];
+let _convPaused = false;
+
+function addConversation(msg) {
+  if (_convPaused) return;
+  // Client-side dedup: match last entry same (src, dst, service, object, property) within 1 second
+  if (_allConversations.length) {
+    const last = _allConversations[0]; // newest first
+    if (last.src === msg.src && last.dst === msg.dst
+        && last.service === msg.service && last.object === msg.object
+        && last.property === msg.property) {
+      if (Math.abs(msg.ts - last.ts) <= 1.0) {
+        last.count = (last.count || 1) + 1;
+        last.ts = msg.ts;
+        if (msg.value) last.value = msg.value;
+        renderConversations();
+        return;
+      }
+    }
+  }
+  msg.count = msg.count || 1;
+  _allConversations.unshift(msg);
+  while (_allConversations.length > 60000) _allConversations.pop();
+  renderConversations();
+  // Update node filter dropdown
+  const sel = document.getElementById('convNodeFilter');
+  const existing = new Set([...sel.options].map(o => o.value));
+  [msg.src, msg.dst].forEach(mac => {
+    if (mac != null && !existing.has(String(mac))) {
+      const opt = document.createElement('option');
+      opt.value = String(mac);
+      const n = state.nodes[mac];
+      opt.textContent = n && n.device_ids?.length ? `MAC ${mac} (Dev ${n.device_ids[0]})` : `MAC ${mac}`;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+function renderConversations() {
+  const feed = document.getElementById('convFeed');
+  const nodeFilter = document.getElementById('convNodeFilter').value;
+  const svcFilter = document.getElementById('convSvcFilter').value;
+  const search = document.getElementById('convSearch').value.toLowerCase();
+
+  let filtered = _allConversations;
+  if (nodeFilter) {
+    const mac = parseInt(nodeFilter);
+    // Smart filter: exclude broadcasts (dst=255 Who-Is/Who-Has) when filtering specific node
+    filtered = filtered.filter(c => {
+      if (c.src === mac || c.dst === mac) return true;
+      // Include broadcasts FROM this node
+      if (c.src === mac && c.dst === 255) return true;
+      // Exclude other broadcasts (Who-Is/Who-Has from other nodes)
+      return false;
+    });
+  }
+  if (svcFilter) {
+    filtered = filtered.filter(c => c.service && c.service.includes(svcFilter));
+  }
+  if (search) {
+    filtered = filtered.filter(c => c.summary && c.summary.toLowerCase().includes(search));
+  }
+
+  document.getElementById('convCounter').textContent = `${filtered.length}/${_allConversations.length} messages`;
+
+  const visible = filtered.slice(0, 200);
+  let html = '';
+  for (const c of visible) {
+    const svcClass = _getSvcClass(c);
+    const time = c.ts ? new Date(c.ts * 1000).toLocaleTimeString() : '';
+    const arrow = c.pdu_type === 'ComplexAck' || c.pdu_type === 'SimpleAck' ? '←' : '→';
+    const arrowColor = c.pdu_type === 'Error' || c.pdu_type === 'Reject' ? 'color:#f43f5e' : '';
+
+    // PDU type prefix icon
+    const pduIcons = {
+      'ConfirmedReq': '📤', 'UnconfirmedReq': '📡', 'SimpleAck': '✅',
+      'ComplexAck': '📥', 'Error': '❌', 'Reject': '⛔', 'Abort': '🚫'
+    };
+    const icon = pduIcons[c.pdu_type] || '•';
+
+    html += `<div class="conv-row">
+      <span class="conv-ts">${time}</span>
+      <span>${icon}</span>
+      <span class="conv-src">MAC ${c.src}</span>
+      <span class="conv-arrow" style="${arrowColor}">${arrow}</span>
+      <span class="conv-dst">MAC ${c.dst}</span>
+      <span class="conv-svc ${svcClass}">${c.service||''}</span>
+      <span class="conv-obj">${c.object||''}</span>
+      <span class="conv-prop">${c.property||''}</span>
+      ${c.value ? `<span class="conv-val">= ${c.value}</span>` : ''}
+      ${c.count > 1 ? `<span class="conv-count">×${c.count}</span>` : ''}
+    </div>`;
+  }
+  if (!html) {
+    html = '<div style="font-size:11px;color:var(--muted);padding:12px;text-align:center">Chưa có messages phù hợp filter.</div>';
+  }
+  feed.innerHTML = html;
+}
+
+function _getSvcClass(c) {
+  const svc = (c.service || '').toLowerCase();
+  if (svc.includes('readprop')) return 'read';
+  if (svc.includes('writeprop')) return 'write';
+  if (svc.includes('i-am')) return 'iam';
+  if (svc.includes('who-is')) return 'whois';
+  if (svc.includes('cov')) return 'cov';
+  if (c.pdu_type === 'SimpleAck' || c.pdu_type === 'ComplexAck') return 'ack';
+  if (c.pdu_type === 'Error' || c.pdu_type === 'Reject') return 'error';
+  return 'other';
+}
+
+function clearConversations() {
+  _allConversations = [];
+  document.getElementById('convFeed').innerHTML = '';
+  document.getElementById('convCounter').textContent = '0 messages';
+}
+
+function toggleConvPause() {
+  _convPaused = !_convPaused;
+  document.getElementById('convPauseBtn').textContent = _convPaused ? '▶' : '⏸';
+  document.getElementById('convPauseBtn').title = _convPaused ? 'Resume' : 'Pause';
 }
 
 // ── Sniffer Tab ───────────────────────────────────────────────────────────────
@@ -871,16 +1357,21 @@ function renderSnifferStats(r){
 
 function renderPathologies(list){
   const el=document.getElementById('pathList');
-  if(!list.length){el.innerHTML='<div style="color:var(--green);font-size:12px;">✅ No issues detected</div>';return;}
-  el.innerHTML=list.map(p=>`
+  if(!list.length){el.innerHTML='<div style="color:var(--green);font-size:12px;">✅ No issues detected — bus is healthy</div>';return;}
+  el.innerHTML=list.map(p=>{
+    const rule = DIAG_RULES[p.code]||{};
+    return `
     <div class="path-item ${p.severity}">
-      <span style="font-size:18px">${{critical:'🔴',warning:'🟡',info:'🔵'}[p.severity]||'•'}</span>
-      <div><div class="path-code">${p.code}</div>
-      <div class="path-desc">${p.description}</div>
-      ${p.detail?`<div class="path-detail">${p.detail}</div>`:''}
-      ${p.nodes_involved?.length?`<div class="path-detail">Nodes: ${p.nodes_involved.join(', ')}</div>`:''}
+      <span style="font-size:18px">${rule.icon||{critical:'🔴',warning:'🟡',info:'🔵'}[p.severity]||'•'}</span>
+      <div>
+        <div class="path-code">${p.code}</div>
+        <div class="path-desc">${p.description}</div>
+        ${p.detail?`<div class="path-detail">${p.detail}</div>`:''}
+        ${p.nodes_involved?.length?`<div class="path-detail">Nodes: ${p.nodes_involved.join(', ')}</div>`:''}
+        ${rule.fix?`<div style="margin-top:6px;padding:6px 10px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.2);border-radius:5px;font-size:11px;color:var(--yellow)">💡 <b>Cách sửa:</b> ${rule.fix}</div>`:''}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function renderNodeStats(nodes){
@@ -910,6 +1401,24 @@ function renderFrameLog(frames){
     <td>${f.len}</td>
     <td>${f.valid?'✓':'<span style="color:var(--red)">✗</span>'}</td>
   </tr>`).join('');
+}
+
+// ── Sniffer → Node Grid polling (when in sniffer-only mode) ──────────────────
+async function pollSnifferNodes(){
+  try{
+    const nodes = await fetch('/api/nodes').then(r=>r.json());
+    if(nodes.length){
+      // Clear old sniffer nodes, re-populate
+      const snifferMacs = new Set(nodes.filter(n=>n.source==='sniffer').map(n=>n.address));
+      // Remove stale sniffer-only nodes
+      for(const [k,v] of Object.entries(state.nodes)){
+        if(v.source==='sniffer' && !snifferMacs.has(parseInt(k))) delete state.nodes[k];
+      }
+      nodes.forEach(n=>state.nodes[n.address]=n);
+      updateStats({});
+      renderGrid();
+    }
+  }catch(e){}
 }
 
 // ── File Transfer ─────────────────────────────────────────────────────────────
@@ -1039,22 +1548,42 @@ async function detectPorts(){
 }
 
 async function triggerScan(){
-  await fetch('/api/scan',{method:'POST'}).catch(()=>{});
+  try{
+    const r = await fetch('/api/scan',{method:'POST'});
+    if(!r.ok){
+      const d = await r.json();
+      addPathologyEvent({severity:'info',code:'SCAN_INFO',description:d.detail||'Scanner unavailable'});
+    }
+  }catch(e){}
 }
 
 // ── Nav status ────────────────────────────────────────────────────────────────
 async function checkNav(){
-  const checks=[{port:8080,id:'nsGw',path:'/api/auth/status'},{port:8766,id:'nsMb',path:'/api/sniffer/report'}];
+  const checks=[{port:8000,id:'nsGateway',path:'/api/status'},{port:8766,id:'nsModbus',path:'/api/sniffer/report'}];
   for(const c of checks){
     try{
       await fetch(`${location.protocol}//${location.hostname}:${c.port}${c.path}`,{mode:'no-cors',signal:AbortSignal.timeout(2000)});
       document.getElementById(c.id).style.background='var(--green)';
-    }catch(e){document.getElementById(c.id).style.background='var(--red)';}
+    }catch(e){document.getElementById(c.id)&&(document.getElementById(c.id).style.background='var(--red)');}
   }
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init(){
+  // Detect operating mode
+  try{
+    const modeInfo = await fetch('/api/mode').then(r=>r.json());
+    state.mode = modeInfo.mode;
+    const mi = document.getElementById('modeIndicator');
+    const labels = {
+      full: '🟢 Full Mode — Scanner + Sniffer + Bridge chạy đầy đủ',
+      sniffer: '📡 Sniffer-Only Mode — Passive monitor (không có BAC0 scanner)',
+      offline: '🔴 Offline — Không có serial port'
+    };
+    mi.innerHTML = `<span class="mode-badge ${state.mode}">${state.mode.toUpperCase()}</span> <span style="font-size:11px;color:var(--muted);margin-left:6px">${labels[state.mode]||''}</span>`;
+  }catch(e){}
+
+  // Load nodes (BAC0 or sniffer fallback)
   try{
     const [nodes,stats,events]=await Promise.all([
       fetch('/api/nodes').then(r=>r.json()),
@@ -1069,6 +1598,11 @@ async function init(){
   connect();
   checkNav();
   setInterval(checkNav, 30000);
+
+  // In sniffer-only mode: poll nodes every 5 seconds to update grid
+  if(state.mode === 'sniffer'){
+    _snifferPollTimer = setInterval(pollSnifferNodes, 5000);
+  }
 }
 init();
 </script>
