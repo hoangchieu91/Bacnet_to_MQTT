@@ -312,6 +312,16 @@ function ModeToggle({ value, mappingId }) {
     </button>
   );
 }
+function TransportBadge({ value }) {
+  const isMstp = value === 'mstp';
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wide ${
+      isMstp ? 'bg-warning/15 text-warning border border-warning/30' : 'bg-accent-primary/10 text-accent-secondary border border-accent-secondary/20'
+    }`}>
+      {isMstp ? '🔌 MS/TP' : '🌐 IP'}
+    </span>
+  );
+}
 function ValueCell({ data }) {
   const val = data?.last_value;
   if (val == null) return <span className="text-text-muted">—</span>;
@@ -343,6 +353,76 @@ function EnabledCell({ value, data }) {
   );
 }
 
+// ── Custom Column Filters ───────────────────────────────────────
+const TypeColumnFilter = React.forwardRef((props, ref) => {
+  const [filterState, setFilterState] = useState('');
+  const isMounted = useRef(false);
+
+  React.useImperativeHandle(ref, () => ({
+    isFilterActive: () => filterState !== '',
+    doesFilterPass: (params) => params.data.object_type === filterState,
+    getModel: () => filterState !== '' ? { value: filterState } : null,
+    setModel: (model) => setFilterState(model == null ? '' : model.value)
+  }));
+
+  useEffect(() => {
+    if (!isMounted.current) {
+      isMounted.current = true;
+      return;
+    }
+    props.filterChangedCallback(); 
+  }, [filterState]);
+
+  return (
+    <div className="p-3 bg-bg-secondary w-48 border border-border rounded-lg flex flex-col">
+      <label className={LABEL_CLS}>Filter by Type</label>
+      <select 
+        value={filterState} 
+        onChange={e => setFilterState(e.target.value)}
+        className={SELECT_CLS}
+      >
+        <option value="">All Types</option>
+        {OBJ_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
+      </select>
+    </div>
+  );
+});
+
+const ModeColumnFilter = React.forwardRef((props, ref) => {
+  const [filterState, setFilterState] = useState('');
+  const isMounted = useRef(false);
+
+  React.useImperativeHandle(ref, () => ({
+    isFilterActive: () => filterState !== '',
+    doesFilterPass: (params) => params.data.read_mode === filterState,
+    getModel: () => filterState !== '' ? { value: filterState } : null,
+    setModel: (model) => setFilterState(model == null ? '' : model.value)
+  }));
+
+  useEffect(() => {
+    if (!isMounted.current) {
+      isMounted.current = true;
+      return;
+    }
+    props.filterChangedCallback(); 
+  }, [filterState]);
+
+  return (
+    <div className="p-3 bg-bg-secondary w-40 border border-border rounded-lg flex flex-col">
+      <label className={LABEL_CLS}>Filter by Mode</label>
+      <select 
+        value={filterState} 
+        onChange={e => setFilterState(e.target.value)}
+        className={SELECT_CLS}
+      >
+        <option value="">All Modes</option>
+        <option value="poll">🔄 Poll</option>
+        <option value="cov">⚡ COV</option>
+      </select>
+    </div>
+  );
+});
+
 // ── Main Page ───────────────────────────────────────────────────
 export function MappingsPage() {
   const gridRef = useRef();
@@ -350,10 +430,14 @@ export function MappingsPage() {
     selectedIds, selectAll, clearSelection, deleteMapping, exportMappings, importMappings } = useMappingStore();
 
   const [quickFilter, setQuickFilter] = useState('');
+  const [filterType, setFilterType] = useState('');
+  const [filterMode, setFilterMode] = useState('');
   const [showDetail, setShowDetail] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [showBulkEdit, setShowBulkEdit] = useState(false);
   const [showClone, setShowClone] = useState(false);
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [pendingDeleteRows, setPendingDeleteRows] = useState([]);
   const [groups, setGroups] = useState([]);
   const [toast, setToast] = useState('');
 
@@ -367,13 +451,14 @@ export function MappingsPage() {
   const colDefs = useMemo(() => [
     { headerCheckboxSelection: true, checkboxSelection: true, width: 50, pinned: 'left', headerCheckboxSelectionFilteredOnly: true, suppressHeaderMenuButton: true },
     { field: 'label', headerName: 'Label', flex: 2, minWidth: 180, editable: true,
-      valueGetter: p => { const full = p.data?.label || `${p.data?.object_type}:${p.data?.object_instance}`; return full.split(/[.\\/\\\\]/).pop() || full; },
+      valueGetter: p => { const full = p.data?.label || `${p.data?.object_type}:${p.data?.object_instance}`; return full.split(/[.\/\\]/).pop() || full; },
       cellClass: 'font-medium' },
-    { field: 'object_type', headerName: 'Type', width: 90, cellRenderer: p => <TypeBadge value={p.value} /> },
+    { field: 'object_type', headerName: 'Type', width: 90, cellRenderer: p => <TypeBadge value={p.value} />, filter: TypeColumnFilter },
     { field: 'device_id', headerName: 'Device', width: 90, editable: true, cellClass: 'text-text-secondary' },
     { field: 'object_instance', headerName: 'Instance', width: 100 },
     { headerName: 'Value', width: 130, cellRenderer: p => <ValueCell data={p.data} />, valueGetter: p => p.data?.last_value },
-    { field: 'read_mode', headerName: 'Mode', width: 110, cellRenderer: p => <ModeToggle value={p.value || 'poll'} mappingId={p.data?.id} />, suppressCellFlash: true },
+    { field: 'read_mode', headerName: 'Mode', width: 110, cellRenderer: p => <ModeToggle value={p.value || 'poll'} mappingId={p.data?.id} />, suppressCellFlash: true, filter: ModeColumnFilter },
+    { field: 'transport', headerName: 'Transport', width: 110, cellRenderer: p => <TransportBadge value={p.value || 'ip'} />, suppressCellFlash: true },
     { field: 'poll_interval', headerName: 'Interval', width: 90, editable: true, valueFormatter: p => `${p.value}s`, cellClass: 'text-text-secondary' },
     { field: 'group', headerName: 'Group', width: 120, editable: true, cellClass: 'text-accent-secondary font-medium' },
     { field: 'mqtt_topic', headerName: 'MQTT Topic', flex: 1, minWidth: 150, editable: true, cellClass: 'text-text-muted text-xs' },
@@ -474,26 +559,46 @@ export function MappingsPage() {
     input.click();
   }, [importMappings]);
 
-  const handleDeleteSelected = useCallback(async () => {
-    // Read directly from ag-grid to avoid stale closure on selectedIds
+  const handleDeleteSelected = useCallback(() => {
     const selectedRows = gridRef.current?.api?.getSelectedRows() || [];
     if (selectedRows.length === 0) { showToast('⚠️ No rows selected'); return; }
-    if (!confirm(`Delete ${selectedRows.length} mapping(s)?`)) return;
-    let deleted = 0;
-    for (const row of selectedRows) {
-      try {
-        await fetch(`${API}/mappings/${row.id}`, { method: 'DELETE' });
-        deleted++;
-      } catch (e) { console.error('Delete failed for', row.id, e); }
+    setPendingDeleteRows(selectedRows);
+    setShowConfirmDelete(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(async () => {
+    setShowConfirmDelete(false);
+    const rows = pendingDeleteRows;
+    if (rows.length === 0) return;
+    try {
+      const res = await fetch(`${API}/mappings/bulk-delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: rows.map(r => r.id) }),
+      });
+      const result = await res.json();
+      clearSelection();
+      await fetchMappings();
+      showToast(`🗑 Deleted ${result.deleted} point${result.deleted !== 1 ? 's' : ''}`);
+    } catch (e) {
+      console.error('Bulk delete error:', e);
+      showToast('❌ Delete failed: ' + e.message);
     }
-    clearSelection();
-    await fetchMappings();
-    showToast(`🗑 Deleted ${deleted} point${deleted !== 1 ? 's' : ''}`);
-  }, [clearSelection, fetchMappings]);
+    setPendingDeleteRows([]);
+  }, [pendingDeleteRows, clearSelection, fetchMappings]);
 
   const selectedMapping = mappings.find(m => m.id === selectedId);
   const selectedMappings = mappings.filter(m => selectedIds.has(m.id));
   const selCount = selectedIds.size;
+
+  // Client-side filtering for Type and Mode dropdowns
+  const filteredMappings = useMemo(() => {
+    return mappings.filter(m => {
+      if (filterType && m.object_type !== filterType) return false;
+      if (filterMode && m.read_mode !== filterMode) return false;
+      return true;
+    });
+  }, [mappings, filterType, filterMode]);
 
   return (
     <div className="flex h-screen w-full overflow-hidden">
@@ -548,21 +653,66 @@ export function MappingsPage() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative mb-4">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-          <input
-            type="text" placeholder="Search by label, type, group, device ID..."
-            value={quickFilter} onChange={e => setQuickFilter(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-bg-input border border-border rounded-xl text-sm text-white placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:shadow-[0_0_0_3px_rgba(0,240,255,0.1)] transition-all"
-          />
+        {/* Search + Filters */}
+        <div className="flex gap-2 mb-4 flex-wrap">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              type="text" placeholder="Search by label, group, device ID..."
+              value={quickFilter} onChange={e => setQuickFilter(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-bg-input border border-border rounded-xl text-sm text-white placeholder:text-text-muted focus:outline-none focus:border-border-focus focus:shadow-[0_0_0_3px_rgba(0,240,255,0.1)] transition-all"
+            />
+          </div>
+
+          {/* Type dropdown filter */}
+          <select
+            value={filterType}
+            onChange={e => setFilterType(e.target.value)}
+            className="px-3 py-2.5 bg-bg-input border border-border rounded-xl text-sm text-white focus:outline-none focus:border-border-focus transition-all cursor-pointer min-w-[160px]"
+          >
+            <option value="">All Types</option>
+            {OBJ_TYPES.map(t => (
+              <option key={t.v} value={t.v}>{t.l}</option>
+            ))}
+          </select>
+
+          {/* Mode dropdown filter */}
+          <select
+            value={filterMode}
+            onChange={e => setFilterMode(e.target.value)}
+            className="px-3 py-2.5 bg-bg-input border border-border rounded-xl text-sm text-white focus:outline-none focus:border-border-focus transition-all cursor-pointer min-w-[130px]"
+          >
+            <option value="">All Modes</option>
+            <option value="poll">🔄 Poll</option>
+            <option value="cov">⚡ COV</option>
+          </select>
+
+          {/* Active filter count badge */}
+          {(filterType || filterMode) && (
+            <button
+              onClick={() => { setFilterType(''); setFilterMode(''); }}
+              className="px-3 py-2 rounded-xl border border-error/40 text-error hover:bg-error/10 text-xs font-medium transition-all flex items-center gap-1"
+              title="Clear filters"
+            >
+              <X size={14} /> Clear filters
+            </button>
+          )}
         </div>
+
+        {/* Filter info */}
+        {(filterType || filterMode) && (
+          <p className="text-xs text-text-muted mb-2">
+            Showing <span className="text-accent-primary font-bold">{filteredMappings.length}</span> of {mappings.length} points
+            {filterType && <span> · Type: <span className="text-info">{TYPE_MAP[filterType] || filterType}</span></span>}
+            {filterMode && <span> · Mode: <span className="text-success">{filterMode}</span></span>}
+          </p>
+        )}
 
         {/* AG-Grid */}
         <div className="flex-1 rounded-2xl overflow-hidden border border-border bg-bg-card/30 backdrop-blur-xl" style={{ minHeight: '400px' }}>
           <AgGridReact
             ref={gridRef}
-            rowData={mappings} columnDefs={colDefs} defaultColDef={defaultColDef}
+            rowData={filteredMappings} columnDefs={colDefs} defaultColDef={defaultColDef}
             quickFilterText={quickFilter} rowSelection="multiple"
             suppressRowClickSelection={true}
             onCellValueChanged={onCellValueChanged}
@@ -570,7 +720,7 @@ export function MappingsPage() {
             onSelectionChanged={onSelectionChanged}
             animateRows={true} getRowId={p => p.data.id}
             theme={darkGridTheme} rowHeight={44} headerHeight={40}
-            overlayNoRowsTemplate='<div style="padding:40px;color:#5a5a75;">No mappings yet. Click <b>+ Add Point</b> to start.</div>'
+            overlayNoRowsTemplate='<div style="padding:40px;color:#5a5a75;">No mappings match current filters.</div>'
           />
         </div>
       </div>
@@ -591,6 +741,41 @@ export function MappingsPage() {
         <CloneModal count={selCount} selectedMappings={selectedMappings} groups={groups}
           onClose={() => setShowClone(false)}
           onDone={n => { showToast(`✅ Cloned ${n} points`); clearSelection(); }} />
+      )}
+
+      {/* Confirm Delete Modal */}
+      {showConfirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-bg-secondary border border-error/40 rounded-2xl shadow-2xl w-full max-w-sm mx-4 p-6">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-error/15 flex items-center justify-center flex-shrink-0">
+                <Trash2 size={20} className="text-error" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Confirm Delete</h3>
+                <p className="text-xs text-text-muted mt-0.5">This action cannot be undone.</p>
+              </div>
+            </div>
+            <p className="text-sm text-text-secondary mb-5">
+              Are you sure you want to delete{' '}
+              <span className="text-error font-bold">{pendingDeleteRows.length} point{pendingDeleteRows.length !== 1 ? 's' : ''}</span>?
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setShowConfirmDelete(false); setPendingDeleteRows([]); }}
+                className="flex-1 px-4 py-2 border border-border rounded-lg text-sm text-text-secondary hover:text-white hover:border-accent-primary transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDelete}
+                className="flex-1 px-4 py-2 bg-error rounded-lg text-white text-sm font-bold hover:-translate-y-0.5 transition-transform shadow-[0_2px_12px_rgba(255,70,85,0.3)]"
+              >
+                🗑 Delete {pendingDeleteRows.length}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, RefreshCw, TestTube, CheckCircle, XCircle, Download, Upload, Plus, Trash2, Webhook, Loader2, Shield, Eye, EyeOff } from 'lucide-react';
+import { Save, RefreshCw, TestTube, CheckCircle, XCircle, Download, Upload, Plus, Trash2, Webhook, Loader2, Shield, Eye, EyeOff, Usb, Power, PowerOff } from 'lucide-react';
 import { useAuth } from '../App';
 
 const API = '/api';
@@ -342,20 +342,27 @@ function UsersTab() {
 export function SettingsPage() {
   const [bacnet, setBacnet] = useState({});
   const [mqtt, setMqtt] = useState({});
+  const [mstp, setMstp] = useState({ enabled: false, port: '/dev/ttyUSB0', baudrate: 38400, mac: 31 });
+  const [mstpStatus, setMstpStatus] = useState({});
   const [interfaces, setInterfaces] = useState([]);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [mstpLoading, setMstpLoading] = useState(false);
   const [tab, setTab] = useState('bacnet');
 
   const fetchConfig = useCallback(async () => {
     try {
-      const [b, m, ifaces] = await Promise.all([
+      const [b, m, ifaces, mc, ms] = await Promise.all([
         fetch(`${API}/bacnet/config`).then(r => r.json()),
         fetch(`${API}/mqtt/config`).then(r => r.json()),
         fetch(`${API}/bacnet/interfaces`).then(r => r.json()).catch(() => ({ interfaces: [] })),
+        fetch(`${API}/mstp/config`).then(r => r.json()).catch(() => ({})),
+        fetch(`${API}/mstp/status`).then(r => r.json()).catch(() => ({})),
       ]);
       setBacnet(b); setMqtt(m);
       setInterfaces(ifaces.interfaces || []);
+      if (mc.port) setMstp(mc);
+      setMstpStatus(ms);
     } catch (e) { console.error(e); }
   }, []);
 
@@ -418,9 +425,30 @@ export function SettingsPage() {
   const { user: currentUser } = useAuth();
   const isAdmin = !currentUser || currentUser.role === 'admin';
 
+  const saveMstp = async () => {
+    setSaving(true);
+    try {
+      await fetch(`${API}/mstp/config`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mstp) });
+    } catch (e) { console.error(e); }
+    setSaving(false);
+  };
+
+  const toggleMstp = async () => {
+    setMstpLoading(true);
+    try {
+      const endpoint = mstpStatus.connected ? `${API}/mstp/disable` : `${API}/mstp/enable`;
+      await fetch(endpoint, { method: 'POST' });
+      // Refresh status
+      const ms = await fetch(`${API}/mstp/status`).then(r => r.json());
+      setMstpStatus(ms);
+    } catch (e) { console.error(e); }
+    setMstpLoading(false);
+  };
+
   const tabs = [
     { id: 'bacnet', label: 'BACnet' },
     { id: 'mqtt', label: 'MQTT' },
+    { id: 'mstp', label: '🔌 MS/TP' },
     { id: 'webhooks', label: '🔔 Webhooks' },
     ...(isAdmin ? [{ id: 'users', label: '👤 Users' }] : []),
     { id: 'system', label: 'System' },
@@ -486,6 +514,60 @@ export function SettingsPage() {
             </button>
             {testResult === 'ok' && <span className="flex items-center gap-1 text-success text-sm"><CheckCircle size={14} /> Connected!</span>}
             {testResult === 'fail' && <span className="flex items-center gap-1 text-error text-sm"><XCircle size={14} /> Failed</span>}
+          </div>
+        </Section>
+      )}
+
+      {/* MS/TP Tab */}
+      {tab === 'mstp' && (
+        <Section title="MS/TP Serial Configuration">
+          {/* Status + Toggle */}
+          <div className="flex items-center justify-between mb-5 p-3 bg-bg-input/40 border border-border/30 rounded-lg">
+            <div className="flex items-center gap-3">
+              <Usb size={18} className={mstpStatus.connected ? 'text-success' : 'text-text-muted'} />
+              <div>
+                <div className="text-sm font-medium text-white">
+                  MS/TP {mstpStatus.connected ? 'Connected' : mstpStatus.enabled ? 'Enabled (disconnected)' : 'Disabled'}
+                </div>
+                <div className="text-[10px] text-text-muted">
+                  {mstpStatus.port || mstp.port} @ {mstpStatus.baudrate || mstp.baudrate} baud · MAC {mstpStatus.mac || mstp.mac}
+                  {mstpStatus.devices_cached > 0 && ` · ${mstpStatus.devices_cached} devices cached`}
+                </div>
+              </div>
+            </div>
+            <button onClick={toggleMstp} disabled={mstpLoading}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                mstpStatus.connected
+                  ? 'bg-error/20 text-error border border-error/30 hover:bg-error/30'
+                  : 'bg-success/20 text-success border border-success/30 hover:bg-success/30'
+              } disabled:opacity-50`}>
+              {mstpLoading ? <Loader2 size={14} className="animate-spin" /> : mstpStatus.connected ? <PowerOff size={14} /> : <Power size={14} />}
+              {mstpStatus.connected ? 'Disable' : 'Enable'}
+            </button>
+          </div>
+
+          {/* Config Fields */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <Field label="Serial Port" value={mstp.port} onChange={v => setMstp(p => ({ ...p, port: v }))} placeholder="/dev/ttyUSB0" />
+            <div>
+              <label className="text-xs text-text-muted block mb-1">Baudrate</label>
+              <select value={mstp.baudrate} onChange={e => setMstp(p => ({ ...p, baudrate: Number(e.target.value) }))}
+                className="w-full px-3 py-2 bg-bg-input border border-border rounded-lg text-sm text-white focus:outline-none focus:border-border-focus">
+                {[9600, 19200, 38400, 57600, 76800, 115200].map(b => <option key={b} value={b}>{b.toLocaleString()}</option>)}
+              </select>
+            </div>
+            <Field label="Our MAC Address" value={mstp.mac} onChange={v => setMstp(p => ({ ...p, mac: Number(v) }))} type="number" placeholder="31" />
+          </div>
+          <button onClick={saveMstp} disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 mt-4 bg-gradient-to-r from-accent-primary to-purple-600 rounded-lg text-white text-sm font-medium disabled:opacity-50">
+            <Save size={14} /> Save MS/TP Config
+          </button>
+
+          <div className="mt-4 p-3 bg-bg-input rounded-lg border border-border/50">
+            <p className="text-[11px] text-text-muted">
+              <span className="text-accent-primary font-bold">Note:</span> MS/TP sử dụng cổng serial RS-485. Đảm bảo không có service khác đang dùng port (vd: mstp-tools). 
+              Sau khi Enable, gateway sẽ tự join token ring và bắt đầu poll các point có transport="mstp".
+            </p>
           </div>
         </Section>
       )}
