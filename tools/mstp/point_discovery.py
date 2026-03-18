@@ -310,7 +310,8 @@ def discover_device(
              "obj_list_done": False,
              "name_fetch_idx": 0,  # index into result.points
              "token_count": 0,
-             "retry_count": 0}
+             "retry_count": 0,
+             "seen_oids": set()}
 
     # If we know the device instance from sniffer, skip I-Am phase
     if known_device_instance is not None:
@@ -352,7 +353,31 @@ def discover_device(
         elif event == 'reply':
             prop = data.get('property', '')
             logger.debug("[Discovery] Reply: prop=%s value=%s", prop, data.get('value', '?'))
-            if prop == 'objectName':
+
+            # Capture objectList element OIDs from value_raw
+            # This is the PRIMARY path — catches replies from _use_token's inline read
+            if prop == 'objectList' and phase['obj_count'] is not None and not phase['obj_list_done']:
+                raw = data.get('value_raw', '')
+                if len(raw) == 8:  # 4-byte OID as hex
+                    try:
+                        oid_int = int(raw, 16)
+                        obj_type = (oid_int >> 22) & 0x3FF
+                        instance = oid_int & 0x3FFFFF
+                        oid_key = (obj_type, instance)
+                        if oid_key not in phase['seen_oids']:
+                            phase['seen_oids'].add(oid_key)
+                            type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
+                            result.points.append(DiscoveredPoint(
+                                object_type=obj_type,
+                                object_type_name=type_name,
+                                instance=instance,
+                            ))
+                            logger.info("[Discovery] objectList elem %s:%d (%d/%d) [via reply]",
+                                        type_name, instance, len(result.points), phase['obj_count'])
+                    except ValueError:
+                        pass
+
+            elif prop == 'objectName':
                 idx = phase['name_fetch_idx']
                 if idx < len(result.points):
                     result.points[idx].name = str(data.get('value', ''))
@@ -420,17 +445,20 @@ def discover_device(
                                     pass
                     if oid:
                         obj_type, inst = oid
-                        type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
-                        result.points.append(DiscoveredPoint(
-                            object_type=obj_type,
-                            object_type_name=type_name,
-                            instance=inst,
-                        ))
-                        pct = 15 + (len(result.points) / phase['obj_count']) * 50
-                        result.progress = min(pct, 65)
-                        logger.debug("[Discovery] objectList[%d] = %s:%d (%d/%d)",
-                                     phase['obj_fetch_idx'] - 1, type_name, inst,
-                                     len(result.points), phase['obj_count'])
+                        oid_key = (obj_type, inst)
+                        if oid_key not in phase['seen_oids']:
+                            phase['seen_oids'].add(oid_key)
+                            type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
+                            result.points.append(DiscoveredPoint(
+                                object_type=obj_type,
+                                object_type_name=type_name,
+                                instance=inst,
+                            ))
+                            pct = 15 + (len(result.points) / phase['obj_count']) * 50
+                            result.progress = min(pct, 65)
+                            logger.debug("[Discovery] objectList[%d] = %s:%d (%d/%d) [via patched]",
+                                         phase['obj_fetch_idx'] - 1, type_name, inst,
+                                         len(result.points), phase['obj_count'])
                     return
 
         master._handle_frame = patched_handle
