@@ -721,11 +721,21 @@ async def mstp_discover_and_map(
 
 @app.post("/api/mstp/enable")
 async def mstp_enable():
-    """Enable MS/TP and start the service at runtime (no restart needed)."""
+    """Enable MS/TP and start the service at runtime (no restart needed).
+    Auto-stops mstp-tools.service to release the serial port."""
     global mstp_service
     cfg = config_manager.config.mstp
     if mstp_service and mstp_service.connected:
         return {"status": "already_connected", "port": cfg.port}
+
+    # Stop mstp-tools to release serial port (ignore errors if not installed)
+    import subprocess
+    try:
+        subprocess.run(["sudo", "systemctl", "stop", "mstp-tools"],
+                       capture_output=True, timeout=10)
+        logger.info("Stopped mstp-tools.service to release serial port")
+    except Exception as e:
+        logger.debug("mstp-tools stop skipped: %s", e)
 
     config_manager.config.mstp.enabled = True
     config_manager.save()
@@ -745,7 +755,7 @@ async def mstp_enable():
 
 @app.post("/api/mstp/disable")
 async def mstp_disable():
-    """Disable MS/TP and stop the service."""
+    """Disable MS/TP and stop the service. Auto-starts mstp-tools.service."""
     global mstp_service
     config_manager.config.mstp.enabled = False
     config_manager.save()
@@ -755,6 +765,16 @@ async def mstp_disable():
         if gateway_engine:
             gateway_engine._mstp = None
         mstp_service = None
+
+    # Restart mstp-tools so sniffer can resume
+    import subprocess
+    try:
+        subprocess.run(["sudo", "systemctl", "start", "mstp-tools"],
+                       capture_output=True, timeout=10)
+        logger.info("Started mstp-tools.service (serial port released)")
+    except Exception as e:
+        logger.debug("mstp-tools start skipped: %s", e)
+
     return {"status": "stopped"}
 
 
