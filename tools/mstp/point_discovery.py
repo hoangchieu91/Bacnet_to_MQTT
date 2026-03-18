@@ -134,61 +134,89 @@ class DiscoveryResult:
         return output.getvalue()
 
 
+def _skip_npdu(data: bytes) -> int | None:
+    """Return offset of APDU start after skipping NPDU routing headers.
+    Returns None if data too short or invalid NPDU."""
+    if len(data) < 2 or data[0] != 0x01:
+        return None
+    ctrl = data[1]
+    off = 2
+    # DNET + DADR
+    if ctrl & 0x20:
+        if off + 3 > len(data): return None
+        off += 2  # DNET (2 bytes)
+        if off >= len(data): return None
+        dlen = data[off]; off += 1 + dlen  # DADR length + DADR
+    # SNET + SADR
+    if ctrl & 0x08:
+        if off + 3 > len(data): return None
+        off += 2  # SNET
+        if off >= len(data): return None
+        slen = data[off]; off += 1 + slen
+    # Hop count (only present if DNET was present)
+    if ctrl & 0x20:
+        off += 1
+    return off if off < len(data) else None
+
+
 def _parse_object_list_ack(data: bytes) -> list[tuple[int, int]] | None:
     """Parse ReadProperty-ACK for objectList → list of (obj_type, instance)."""
-    if len(data) < 4 or data[0] != 0x01:
-        return None
+    off = _skip_npdu(data)
+    if off is None: return None
 
-    ctrl = data[1]
-    offset = 2
-    if ctrl & 0x20:
-        offset += 2; dlen = data[offset]; offset += 1 + dlen
-    if ctrl & 0x08:
-        offset += 2; slen = data[offset]; offset += 1 + slen
-    if ctrl & 0x20:
-        offset += 1
-
-    if offset >= len(data): return None
-    pdu_type = (data[offset] >> 4) & 0x0F
+    pdu_type = (data[off] >> 4) & 0x0F
     if pdu_type != 3: return None  # Not ComplexAck
+    if off + 3 > len(data): return None
 
-    invoke_id = data[offset + 1]
-    service = data[offset + 2]
+    service = data[off + 2]
     if service != 12: return None  # Not ReadProperty
-    offset += 3
+    off += 3
 
-    # Skip context tag 0 (ObjectIdentifier)
-    if offset < len(data) and data[offset] == 0x0C:
-        offset += 5
-    # Skip context tag 1 (PropertyIdentifier)
-    if offset < len(data) and (data[offset] & 0xF8) == 0x18:
-        plen = data[offset] & 0x07
-        offset += 1 + plen
+    # Skip context tag 0 (ObjectIdentifier) — 0x0C + 4 bytes
+    if off < len(data) and data[off] == 0x0C:
+        off += 5
+    # Skip context tag 1 (PropertyIdentifier) — 0x19 xx or 0x1A xx xx
+    if off < len(data) and (data[off] & 0xF8) == 0x18:
+        plen = data[off] & 0x07
+        off += 1 + plen
+    # Skip optional context tag 2 (arrayIndex)
+    if off < len(data) and (data[off] & 0xF8) == 0x28:
+        alen = data[off] & 0x07
+        off += 1 + alen
 
-    # Context tag 3 (opening): propertyValue
-    if offset >= len(data) or data[offset] != 0x3E:
+    # Context tag 3 (opening 0x3E): propertyValue
+    if off >= len(data) or data[off] != 0x3E:
         return None
-    offset += 1  # skip opening tag
+    off += 1  # skip opening tag
 
     objects = []
-    while offset < len(data) and data[offset] != 0x3F:  # 0x3F = closing tag
-        tag = data[offset]
+    while off < len(data) and data[off] != 0x3F:  # 0x3F = closing tag
+        tag = data[off]
         tag_num = (tag >> 4) & 0x0F
         tag_len = tag & 0x07
-
-        if tag_num == 12 and tag_len == 4 and offset + 5 <= len(data):
-            oid = struct.unpack('>I', data[offset+1:offset+5])[0]
+        if tag_num == 12 and tag_len == 4 and off + 5 <= len(data):
+            oid = struct.unpack('>I', data[off+1:off+5])[0]
             obj_type = (oid >> 22) & 0x3FF
             instance = oid & 0x3FFFFF
             objects.append((obj_type, instance))
-            offset += 5
+            off += 5
         else:
-            # Skip unknown tag
-            offset += 1 + tag_len
-            if tag_len >= 5:  # Extended length
-                offset += 1
+            off += 1 + (tag_len if tag_len < 5 else data[off+1] + 1 if off+1 < len(data) else 0)
+            if off <= 0: break  # safety
 
+    logger.info("[Discovery] _parse_object_list_ack found %d objects", len(objects))
     return objects if objects else None
+
+
+def _parse_object_count_ack(data: bytes) -> int | None:
+    """Parse ReadProperty-ACK for objectList array index 0 → item count."""
+    ack = parse_read_property_ack(data)
+    if ack and 'value' in ack:
+        try:
+            return int(ack['value'])
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def _parse_units_ack(data: bytes) -> int | None:
@@ -206,11 +234,14 @@ def discover_device(
     my_mac: int = 127,
     duration: float = 60.0,
     result: DiscoveryResult | None = None,
+    known_device_instance: int | None = None,
 ) -> DiscoveryResult:
     """Run a full discovery scan on a target MS/TP device.
     
     This is a BLOCKING call that takes control of the serial port.
     The sniffer MUST be paused before calling this.
+    
+    If known_device_instance is provided (from sniffer data), skip WhoIs phase.
     """
     if result is None:
         result = DiscoveryResult(mac=target_mac)
@@ -218,31 +249,42 @@ def discover_device(
     result.status = "running"
     result.started_at = time.time()
     result.progress = 0
+    logger.info("[Discovery] Starting scan MAC %d (known_dev=%s) port=%s baud=%d my_mac=%d",
+                target_mac, known_device_instance, port, baudrate, my_mac)
 
     master = MstpMaster(port, baudrate, my_mac)
 
     # Phase tracking
     phase = {"joined": False, "whois_sent": False, "got_iam": False,
              "obj_list_requested": False, "obj_list": None,
-             "current_obj_idx": 0, "prop_queue": [],
-             "token_count": 0}
+             "current_obj_idx": 0, "token_count": 0}
+
+    # If we know the device instance from sniffer, skip I-Am phase
+    if known_device_instance is not None:
+        result.device_instance = known_device_instance
+        phase['got_iam'] = True
+        logger.info("[Discovery] Using known device instance %d (from sniffer)", known_device_instance)
+        result.progress = 10
 
     def on_event(event, data):
         if event == 'joined':
             phase['joined'] = True
             logger.info("[Discovery] Joined token ring as MAC %d", my_mac)
-            # Queue WhoIs
-            master.queue_whois()
-            phase['whois_sent'] = True
+            if not phase['got_iam']:
+                master.queue_whois()
+                phase['whois_sent'] = True
             result.progress = 5
 
         elif event == 'iam':
             dev_id = data.get('device_instance')
-            if dev_id is not None:
+            src_mac = data.get('mac')
+            logger.info("[Discovery] Received I-Am: Device %s from MAC %s", dev_id, src_mac)
+            # Only accept I-Am that originates from our target_mac
+            if dev_id is not None and not phase['got_iam'] and src_mac == target_mac:
                 result.device_instance = dev_id
                 result.vendor_id = data.get('vendor_id')
                 phase['got_iam'] = True
-                logger.info("[Discovery] Found Device %d at MAC %d", dev_id, data.get('mac', '?'))
+                logger.info("[Discovery] ✓ Accepted Device %d from target MAC %d", dev_id, target_mac)
                 result.progress = 10
 
         elif event == 'token':
@@ -251,27 +293,22 @@ def discover_device(
 
             # Retry WhoIs if no I-Am yet
             if not phase['got_iam'] and tc in (5, 15, 30):
+                logger.info("[Discovery] Retry WhoIs (token #%d)", tc)
                 master.queue_whois()
 
-            # After I-Am, read device properties then Object_List
-            if phase['got_iam'] and not phase['obj_list_requested'] and tc > 3:
-                # Read Object_List
+            # After I-Am (or known), read Object_List
+            if phase['got_iam'] and not phase['obj_list_requested'] and tc > 2:
                 dev_inst = result.device_instance
+                logger.info("[Discovery] Requesting Object_List Device %d MAC %d", dev_inst, target_mac)
                 master.queue_read_property(
                     target_mac, dev_inst, 8, dev_inst, PROP_IDS["objectList"])
                 phase['obj_list_requested'] = True
                 result.progress = 15
-                logger.info("[Discovery] Requesting Object_List from Device %d", dev_inst)
 
         elif event == 'reply':
             prop = data.get('property', '')
-            
-            # Check if this is Object_List response
-            if prop == 'objectList' and 'value' not in data:
-                # The standard parser might not handle object list arrays
-                # We'll handle via raw frame in _handle_frame override
-                pass
-            elif prop == 'objectName':
+            logger.debug("[Discovery] Reply: prop=%s value=%s", prop, data.get('value', '?'))
+            if prop == 'objectName':
                 if phase['current_obj_idx'] < len(result.points):
                     result.points[phase['current_obj_idx']].name = str(data.get('value', ''))
             elif prop == 'description':
@@ -284,30 +321,50 @@ def discover_device(
 
     try:
         master.open()
+        logger.info("[Discovery] Serial port opened")
 
         # Override _handle_frame to capture raw Object_List ACK
         original_handle = master._handle_frame
 
         def patched_handle(frame: MstpFrame, callback=None):
             original_handle(frame, callback)
-            # Try to parse Object_List from raw frame data
-            if (frame.ft == FT.BACNET_DATA_NXR and frame.dst == my_mac
-                    and frame.valid and frame.data
+            # Try to parse Object_List from raw BACnet Data frame to us
+            if (frame.ft in (FT.BACNET_DATA_NXR, FT.BACNET_DATA_XR)
+                    and frame.dst == my_mac and frame.valid and frame.data
                     and phase['obj_list_requested'] and phase['obj_list'] is None):
-                obj_list = _parse_object_list_ack(frame.data)
-                if obj_list:
-                    phase['obj_list'] = obj_list
-                    result.object_count = len(obj_list)
-                    logger.info("[Discovery] Got Object_List: %d objects", len(obj_list))
-                    # Create DiscoveredPoint objects
-                    for obj_type, inst in obj_list:
-                        type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
-                        result.points.append(DiscoveredPoint(
-                            object_type=obj_type,
-                            object_type_name=type_name,
-                            instance=inst,
-                        ))
-                    result.progress = 25
+                logger.info("[Discovery] Received BACnet frame %d bytes from MAC %d -> parsing Object_List",
+                            len(frame.data), frame.src)
+                # Check if it's an Error PDU first
+                npdu_off = _skip_npdu(frame.data)
+                if npdu_off is not None and npdu_off < len(frame.data):
+                    pdu_type = (frame.data[npdu_off] >> 4) & 0x0F
+                    if pdu_type == 5:  # ErrorPDU
+                        logger.error("[Discovery] ✗ Device returned Error for Object_List request (hex: %s)",
+                                     frame.data.hex())
+                        # If known_dev set wrong device, clear and wait for correct I-Am
+                        if result.device_instance and result.device_instance != known_device_instance:
+                            logger.warning("[Discovery] Retrying with different device instance...")
+                        phase['obj_list_requested'] = False  # Allow retry
+                        return  # Don't try to parse as Object_List
+                try:
+                    obj_list = _parse_object_list_ack(frame.data)
+                    if obj_list:
+                        phase['obj_list'] = obj_list
+                        result.object_count = len(obj_list)
+                        logger.info("[Discovery] ✓ Object_List parsed: %d objects", len(obj_list))
+                        for obj_type, inst in obj_list:
+                            type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
+                            result.points.append(DiscoveredPoint(
+                                object_type=obj_type,
+                                object_type_name=type_name,
+                                instance=inst,
+                            ))
+                        result.progress = 25
+                    else:
+                        logger.warning("[Discovery] Object_List parse returned None (data hex: %s)",
+                                       frame.data[:40].hex())
+                except Exception as e:
+                    logger.error("[Discovery] Object_List parse error: %s", e)
 
         master._handle_frame = patched_handle
 
@@ -339,7 +396,6 @@ def discover_device(
                 if phase['obj_list'] and phase['current_obj_idx'] < len(result.points):
                     idx = phase['current_obj_idx']
                     pt = result.points[idx]
-                    # Read objectName for current object
                     dev_inst = result.device_instance
                     master.queue_read_property(
                         target_mac, dev_inst, pt.object_type, pt.instance,
@@ -365,32 +421,43 @@ def discover_device(
             # All done?
             if (phase['obj_list'] is not None
                     and phase['current_obj_idx'] >= len(result.points)):
-                logger.info("[Discovery] All objects scanned!")
+                logger.info("[Discovery] All %d objects scanned!", len(result.points))
                 break
 
-            # Timeout if no I-Am after 20s
+            # Timeout if no I-Am after 30s (give more time)
             elapsed = time.monotonic() - start
-            if not phase['got_iam'] and elapsed > 20:
+            if not phase['got_iam'] and elapsed > 30:
                 result.status = "error"
-                result.error = f"No I-Am from MAC {target_mac} after 20s"
+                result.error = f"No I-Am from MAC {target_mac} after 30s"
                 result.finished_at = time.time()
+                logger.error("[Discovery] %s", result.error)
+                return result
+
+            # Timeout if Object_List not received after requesting for 30s
+            if (phase['obj_list_requested'] and phase['obj_list'] is None
+                    and elapsed > 45):
+                result.status = "error"
+                result.error = f"Object_List response timeout after 45s"
+                result.finished_at = time.time()
+                logger.error("[Discovery] %s", result.error)
                 return result
 
     except Exception as exc:
         result.status = "error"
         result.error = str(exc)
-        logger.error("[Discovery] Error: %s", exc)
+        logger.error("[Discovery] Error: %s", exc, exc_info=True)
     finally:
         try:
             master.close()
         except Exception:
             pass
 
-    result.status = "done"
+    if result.status != "error":
+        result.status = "done"
     result.progress = 100
     result.finished_at = time.time()
-    logger.info("[Discovery] Complete: %d points in %.1fs",
-                len(result.points), result.finished_at - result.started_at)
+    logger.info("[Discovery] Complete: %d points in %.1fs (status=%s)",
+                len(result.points), result.finished_at - result.started_at, result.status)
     return result
 
 
@@ -411,14 +478,16 @@ class DiscoveryRunner:
         return self._result
 
     def start(self, port: str, baudrate: int, target_mac: int,
-              my_mac: int = 127, duration: float = 60.0) -> None:
+              my_mac: int = 127, duration: float = 60.0,
+              known_device_instance: int | None = None) -> None:
         if self.is_running:
             raise RuntimeError("Discovery already running")
 
         self._result = DiscoveryResult(mac=target_mac)
 
         def _run():
-            discover_device(port, baudrate, target_mac, my_mac, duration, self._result)
+            discover_device(port, baudrate, target_mac, my_mac, duration,
+                            self._result, known_device_instance)
 
         self._thread = threading.Thread(target=_run, daemon=True, name="discovery")
         self._thread.start()

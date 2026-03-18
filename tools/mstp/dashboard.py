@@ -311,16 +311,36 @@ async def start_discovery(mac: int) -> dict:
     baud = serial_cfg.get("baudrate", 38400)
     my_mac = serial_cfg.get("mac", 127)
 
+    # Look up known device_instance + compute best my_mac from sniffer data
+    known_dev = None
+    if _sniffer and _sniffer.analyzer:
+        node = _sniffer.analyzer._nodes.get(mac)
+        if node and node.device_instances:
+            known_dev = next(iter(node.device_instances))
+            logger.info("[Discovery] Known device instance %d for MAC %d from sniffer", known_dev, mac)
+        # Auto-compute my_mac: use (max_active_mac + 1) so ring node will PFM to us
+        active_macs = list(_sniffer.analyzer._nodes.keys())
+        if active_macs:
+            max_mac = max(active_macs)
+            candidate = max_mac + 1
+            # Make sure candidate doesn't collide and is <= 127
+            while candidate in active_macs and candidate <= 126:
+                candidate += 1
+            if candidate <= 126:
+                my_mac = candidate
+                logger.info("[Discovery] Auto-selected my_mac=%d (max active=%d)", my_mac, max_mac)
+
     # Pause sniffer to release serial port
     sniffer_was_running = False
     if _sniffer and _sniffer._running:
         sniffer_was_running = True
         await _sniffer.stop()
         logger.info("[Discovery] Sniffer paused for discovery")
-        await asyncio.sleep(0.5)  # Let serial port settle
+        await asyncio.sleep(1.0)  # Let serial port settle fully
 
     # Start discovery in thread
-    _discovery.start(port, baud, mac, my_mac=my_mac, duration=60.0)
+    _discovery.start(port, baud, mac, my_mac=my_mac, duration=60.0,
+                     known_device_instance=known_dev)
 
     # Monitor thread and resume sniffer when done
     async def _wait_and_resume():
