@@ -37,9 +37,11 @@ class GatewayEngine:
         ws_manager: WebSocketManager,
         history_store=None,
         webhook_service=None,
+        mstp_service=None,
     ):
         self._cm = config_manager
         self._bacnet = bacnet
+        self._mstp = mstp_service  # Optional MstpBacnetService for RS-485
         self._mqtt = mqtt
         self._ws = ws_manager
         self._history = history_store
@@ -298,8 +300,7 @@ class GatewayEngine:
 
             # Build MQTT topic
             prefix = self._cm.config.mqtt.topic_prefix
-            base_topic = mapping.mqtt_topic or \
-                f"{prefix}/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
+            base_topic = f"{prefix}/device/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
 
             value_payload = {
                 "value": parsed,
@@ -458,16 +459,25 @@ class GatewayEngine:
                     for device_id, dev_mappings in by_device.items():
                         address = self._bacnet.get_device_address(device_id)
 
-                        if address and self._is_ip_address(address) and len(dev_mappings) > 1:
-                            # ── BACnet/IP device with multiple due points ↔ use RPM batch ──
-                            batch_size = self.RPM_BATCH_SIZE_IP
-                            for i in range(0, len(dev_mappings), batch_size):
-                                chunk = dev_mappings[i : i + batch_size]
-                                asyncio.create_task(self._poll_device_batch(chunk))
-                        else:
-                            # ── MS/TP device or no address yet ↔ safe single-read path ──
-                            for m in dev_mappings:
-                                asyncio.create_task(self._poll_single_locked(m))
+                        # Separate MS/TP mappings
+                        mstp_mappings = [m for m in dev_mappings if m.transport == "mstp"]
+                        ip_mappings = [m for m in dev_mappings if m.transport != "mstp"]
+
+                        # ── MS/TP device → serial single-read path ──
+                        if mstp_mappings and self._mstp and self._mstp.connected:
+                            for m in mstp_mappings:
+                                asyncio.create_task(self._poll_mstp_single(m))
+
+                        # ── BACnet/IP device with multiple due points → RPM batch ──
+                        if ip_mappings:
+                            if address and self._is_ip_address(address) and len(ip_mappings) > 1:
+                                batch_size = self.RPM_BATCH_SIZE_IP
+                                for i in range(0, len(ip_mappings), batch_size):
+                                    chunk = ip_mappings[i : i + batch_size]
+                                    asyncio.create_task(self._poll_device_batch(chunk))
+                            else:
+                                for m in ip_mappings:
+                                    asyncio.create_task(self._poll_single_locked(m))
 
                 await asyncio.sleep(0.5)
             except asyncio.CancelledError:
@@ -540,6 +550,66 @@ class GatewayEngine:
         except Exception:
             return True  # If /proc/meminfo fails, keep polling
 
+    async def _poll_mstp_single(self, mapping: PointMapping) -> None:
+        """Read presentValue from an MS/TP device via serial and publish."""
+        if not self._mstp or not self._mstp.connected:
+            return
+        try:
+            mac = self._mstp.get_device_mac(mapping.device_id)
+            if mac is None:
+                logger.debug("MS/TP: no MAC for device %d — skipping", mapping.device_id)
+                return
+
+            value = await self._mstp.read_object(
+                mac=mac,
+                device_instance=mapping.device_id,
+                object_type=mapping.object_type,
+                object_instance=mapping.object_instance,
+            )
+
+            if value is None:
+                self._on_device_poll_fail(mapping.device_id, "MS/TP read returned None")
+                return
+
+            now_str = datetime.now(timezone.utc).isoformat()
+            mapping.last_value = value
+            mapping.last_updated = now_str
+            self._on_device_poll_success(mapping.device_id, f"mstp:{mac}")
+
+            # Record to history
+            if self._history:
+                try:
+                    self._history.record(mapping.id, value)
+                except Exception:
+                    pass
+
+            # Publish to MQTT
+            prefix = self._cm.config.mqtt.topic_prefix
+            base_topic = f"{prefix}/device/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
+            value_payload = {
+                "value": value,
+                "object_type": mapping.object_type,
+                "object_instance": mapping.object_instance,
+                "device_id": mapping.device_id,
+                "timestamp": now_str,
+                "source": "mstp",
+            }
+            self._mqtt.publish(f"{base_topic}/value", value_payload)
+
+            # Broadcast WebSocket
+            await self._ws.broadcast({
+                "type": "point_update",
+                "mapping_id": mapping.id,
+                "label": mapping.label,
+                "read_mode": mapping.read_mode,
+                "transport": "mstp",
+                **value_payload,
+            })
+
+        except Exception as exc:
+            logger.error("MS/TP poll error for %s: %s", mapping.id, exc)
+            self._on_device_poll_fail(mapping.device_id, str(exc))
+
     async def _poll_single_locked(self, mapping: PointMapping) -> None:
         """Wrapper that serializes BACnet reads through a shared lock.
 
@@ -607,8 +677,7 @@ class GatewayEngine:
 
                             # Publish to MQTT
                             prefix = self._cm.config.mqtt.topic_prefix
-                            base_topic = mapping.mqtt_topic or \
-                                f"{prefix}/{device_id}/{mapping.object_type}/{mapping.object_instance}"
+                            base_topic = f"{prefix}/device/{device_id}/{mapping.object_type}/{mapping.object_instance}"
                             value_payload = {
                                 "value": value,
                                 "object_type": mapping.object_type,
@@ -818,9 +887,7 @@ class GatewayEngine:
 
             # Build MQTT topics
             prefix = self._cm.config.mqtt.topic_prefix
-            base_topic = mapping.mqtt_topic
-            if not base_topic:
-                base_topic = f"{prefix}/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
+            base_topic = f"{prefix}/device/{mapping.device_id}/{mapping.object_type}/{mapping.object_instance}"
 
             # Publish presentValue
             value_payload = {
@@ -908,7 +975,7 @@ class GatewayEngine:
                 "timestamp": status["last_seen"],
             }))
             prefix = self._cm.config.mqtt.topic_prefix
-            self._mqtt.publish(f"{prefix}/{device_id}/status", {"online": True, "address": address})
+            self._mqtt.publish(f"{prefix}/device/{device_id}/status", {"online": True, "address": address}, retain=True)
 
     def _on_device_poll_fail(self, device_id: int, error: str) -> None:
         """Record a poll failure for a device."""
@@ -935,7 +1002,7 @@ class GatewayEngine:
                 "timestamp": status["last_fail"],
             }))
             prefix = self._cm.config.mqtt.topic_prefix
-            self._mqtt.publish(f"{prefix}/{device_id}/status", {"online": False, "error": error})
+            self._mqtt.publish(f"{prefix}/device/{device_id}/status", {"online": False, "error": error}, retain=True)
 
     def get_device_status(self) -> dict[int, dict]:
         """Return current device status dict."""
@@ -950,9 +1017,10 @@ class GatewayEngine:
                     data = json.load(f)
                 self._known_devices = {int(k): v for k, v in data.items()}
                 logger.info("Loaded %d known devices from %s", len(self._known_devices), self._devices_file)
-                # Pre-populate _device_status for devices that have been seen before
-                # so UI shows online/offline immediately after restart (not pending)
+                # Sync known devices to BacnetService so address resolution works for mappings
+                from backend.models import BacnetDevice
                 for did, info in self._known_devices.items():
+                    # 1. Populate GatewayEngine internal status
                     if info.get("last_seen") and did not in self._device_status:
                         self._device_status[did] = {
                             "online": False,   # assume offline until ping confirms
@@ -961,6 +1029,17 @@ class GatewayEngine:
                             "last_fail": None,
                             "address": info.get("address"),
                         }
+                    
+                    # 2. Register in BacnetService for immediate address resolution
+                    if self._bacnet:
+                        try:
+                            self._bacnet.register_device(BacnetDevice(
+                                device_id=did,
+                                address=info.get("address", ""),
+                                device_name=info.get("name", "")
+                            ))
+                        except Exception as reg_err:
+                            logger.warning("Could not register known device %d: %s", did, reg_err)
         except Exception as e:
             logger.warning("Could not load known devices: %s", e)
             self._known_devices = {}
@@ -1236,7 +1315,15 @@ class GatewayEngine:
 
             command = parts[idx + 1] if len(parts) > idx + 1 else ""
 
-            if command == "write":
+            if command == "device":
+                action = parts[-1]
+                if action == "write":
+                    self._schedule(self._cmd_write(parts, idx, payload))
+                elif action == "release":
+                    self._schedule(self._cmd_release(parts, idx, payload))
+                else:
+                    logger.warning("Unknown MQTT device action: %s", action)
+            elif command == "write":
                 self._schedule(self._cmd_write(parts, idx, payload))
             elif command == "release":
                 self._schedule(self._cmd_release(parts, idx, payload))

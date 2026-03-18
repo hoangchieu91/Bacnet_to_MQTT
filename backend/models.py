@@ -58,6 +58,14 @@ class BacnetConfig(BaseModel):
     bms_server_ip: str = ""   # BMS server to passively monitor WHO-IS / WHO-HAS from
 
 
+class MstpConfig(BaseModel):
+    """MS/TP serial port configuration for RS-485 BACnet."""
+    enabled: bool = False
+    port: str = "/dev/ttyUSB0"
+    baudrate: int = 38400
+    mac: int = 31              # Our MAC address on the MS/TP bus
+
+
 # ──────────────────────────────────────────────
 # BACnet Device / Object
 # ──────────────────────────────────────────────
@@ -102,6 +110,7 @@ class PointMapping(BaseModel):
     mqtt_topic: str = ""
     poll_interval: int = 10
     read_mode: str = "poll"  # "poll" or "cov"
+    transport: str = "ip"    # "ip" (BACnet/IP via BAC0) or "mstp" (serial RS-485)
     enabled: bool = True
     label: str = ""
     group: str = ""  # Group tag (e.g. "FCU-01", "AHU")
@@ -117,11 +126,26 @@ class PointMapping(BaseModel):
     alarm_config: Optional[AlarmConfig] = None  # User-defined alarm thresholds
 
 
+class ChartPoint(BaseModel):
+    """A single data series within a chart."""
+    id: str = ""
+    mapping_id: str
+    label: str = ""
+    color: str = "#00f0ff"
+    y_axis: str = "left"   # "left" | "right"
+    type: str = "line"     # "line" | "area" | "bar"
+    visible: bool = True
+
+
 class ChartConfig(BaseModel):
     id: str = ""
     name: str = "New Chart"
+    preset: str = "1h"        # time range preset key
+    live: bool = True
+    points: list[ChartPoint] = Field(default_factory=list)
+    # Legacy compat — kept so old configs don't error
     point_ids: list[str] = Field(default_factory=list)
-    chart_type: str = "line"  # line, bar, gauge
+    chart_type: str = "line"
     duration_minutes: int = 30
     refresh_seconds: int = 5
 
@@ -162,6 +186,7 @@ class GatewayConfig(BaseModel):
     bacnet: BacnetConfig = Field(default_factory=BacnetConfig)
     gateway: dict = Field(default_factory=lambda: {"mappings": []})
     web: WebConfig = Field(default_factory=WebConfig)
+    mstp: MstpConfig = Field(default_factory=MstpConfig)
     groups: list[GroupConfig] = Field(default_factory=list)
     schedules: list["ScheduleEntry"] = Field(default_factory=list)
     anomaly_rules: list[dict] = Field(default_factory=list)
@@ -222,3 +247,13 @@ class ReleaseRequest(BaseModel):
     object_type: str
     object_instance: int
     priority: int | str = 16  # int (1–16) or "all"
+
+
+class WritePropertyRequest(BaseModel):
+    """Generic BACnet WriteProperty — write any property (not just presentValue)."""
+    device_id: int
+    object_type: str
+    object_instance: int
+    property_name: str           # e.g. "relinquishDefault", "outOfService", "presentValue"
+    value: Any                   # numeric, bool, or string value
+    priority: int | None = None  # only relevant for commandable properties

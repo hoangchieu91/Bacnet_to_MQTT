@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -27,12 +27,14 @@ from backend.models import (
     GroupConfig,
     MqttConfig,
     MqttTestRequest,
+    MstpConfig,
     PointMapping,
     ReleaseRequest,
     ScheduleEntry,
     StatusResponse,
     UserConfig,
     WebhookConfig,
+    WritePropertyRequest,
     WriteRequest,
 )
 from backend.auth_service import (
@@ -64,12 +66,13 @@ history_store: HistoryStore | None = None
 scheduler_service: SchedulerService | None = None
 device_registry: DeviceRegistry | None = None
 webhook_service: WebhookService | None = None
+mstp_service = None  # Optional MstpBacnetService
 
 
 # ── Lifespan (startup / shutdown) ──────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry, webhook_service
+    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry, webhook_service, mstp_service
 
     # Load config
     cfg = config_manager.load()
@@ -86,10 +89,28 @@ async def lifespan(app: FastAPI):
     bacnet_service = BacnetService(cfg.bacnet)
     mqtt_service = MqttService(cfg.mqtt)
     webhook_service = WebhookService(config_manager)
+
+    # Initialise MS/TP service (optional — only if enabled in config)
+    if cfg.mstp.enabled:
+        try:
+            from backend.mstp_service import MstpBacnetService
+            mstp_service = MstpBacnetService(
+                port=cfg.mstp.port,
+                baudrate=cfg.mstp.baudrate,
+                mac=cfg.mstp.mac,
+            )
+            await mstp_service.start()
+            logger.info("MS/TP service started: %s @ %d (MAC=%d)",
+                        cfg.mstp.port, cfg.mstp.baudrate, cfg.mstp.mac)
+        except Exception as exc:
+            logger.warning("MS/TP service init failed (non-critical): %s", exc)
+            mstp_service = None
+
     gateway_engine = GatewayEngine(
         config_manager, bacnet_service, mqtt_service, ws_manager,
         history_store=history_store,
         webhook_service=webhook_service,
+        mstp_service=mstp_service,
     )
 
     # Initialize AnomalyEngine and wire to gateway
@@ -129,6 +150,8 @@ async def lifespan(app: FastAPI):
         mqtt_service.stop()
     if bacnet_service:
         await bacnet_service.stop()
+    if mstp_service:
+        await mstp_service.stop()
     if history_store:
         history_store.close()
     logger.info("Gateway application shut down.")
@@ -197,10 +220,27 @@ async def _auto_start_gateway():
             logger.info("[Auto-Start] Discovery round 2: found %d device(s).", found)
             if discovered and gateway_engine:
                 gateway_engine.register_discovered_devices(discovered)
+
+        # ── Auto-upsert all live devices into persistent registry ──
+        if device_registry and bacnet_service:
+            upserted = 0
+            for dev in bacnet_service.discovered_devices:
+                device_registry.upsert_device(
+                    dev.device_id,
+                    device_name=dev.device_name or "",
+                    address=dev.address or "",
+                    vendor_name=getattr(dev, "vendor_name", "") or "",
+                    model_name=getattr(dev, "model_name", "") or "",
+                    network_id=getattr(dev, "network_id", "") or "",
+                )
+                upserted += 1
+            if upserted:
+                logger.info("[Auto-Start] ✅ Upserted %d devices into persistent registry.", upserted)
+
     except Exception as exc:
         logger.warning("[Auto-Start] Device discovery error: %s — proceeding anyway", exc)
 
-    # Step 3: Start gateway engine (polling + MQTT commands)
+
     try:
         await gateway_engine.start()
         logger.info("[Auto-Start] ✅ Gateway started — polling %d mappings.", len(mappings))
@@ -536,6 +576,76 @@ async def list_network_interfaces():
     except Exception as exc:
         logger.warning("Could not list interfaces: %s", exc)
     return {"interfaces": interfaces}
+
+
+# ═══════════════════════════════════════════════
+# REST API — MS/TP Config & Operations
+# ═══════════════════════════════════════════════
+@app.get("/api/mstp/config")
+async def get_mstp_config():
+    return config_manager.config.mstp.model_dump()
+
+
+@app.put("/api/mstp/config")
+async def update_mstp_config(cfg: MstpConfig):
+    """Update MS/TP serial config. Restart gateway to apply."""
+    config_manager.config.mstp = cfg
+    config_manager.save()
+    return {"status": "updated", "mstp": cfg.model_dump()}
+
+
+@app.get("/api/mstp/status")
+async def get_mstp_status():
+    return {
+        "enabled": config_manager.config.mstp.enabled,
+        "connected": mstp_service.connected if mstp_service else False,
+        "port": config_manager.config.mstp.port,
+        "baudrate": config_manager.config.mstp.baudrate,
+        "mac": config_manager.config.mstp.mac,
+        "devices_cached": len(mstp_service._devices) if mstp_service else 0,
+    }
+
+
+@app.post("/api/mstp/discover")
+async def mstp_discover(duration: float = 15.0):
+    """Scan MS/TP bus for devices."""
+    if not mstp_service or not mstp_service.connected:
+        return JSONResponse({"error": "MS/TP service not connected"}, status_code=503)
+    try:
+        devices = await mstp_service.discover_devices(duration=duration)
+        return {
+            "devices": [
+                {
+                    "mac": d.mac,
+                    "device_instance": d.device_instance,
+                    "vendor_id": d.vendor_id,
+                    "max_apdu": d.max_apdu,
+                }
+                for d in devices
+            ],
+            "count": len(devices),
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/mstp/read")
+async def mstp_read(mac: int, device_instance: int, object_type: str,
+                    object_instance: int, property_name: str = "presentValue"):
+    """Read a single property from an MS/TP device."""
+    if not mstp_service or not mstp_service.connected:
+        return JSONResponse({"error": "MS/TP service not connected"}, status_code=503)
+    try:
+        value = await mstp_service.read_object(
+            mac=mac, device_instance=device_instance,
+            object_type=object_type, object_instance=object_instance,
+            property_name=property_name,
+        )
+        return {"mac": mac, "device_instance": device_instance,
+                "object_type": object_type, "object_instance": object_instance,
+                "property": property_name, "value": value}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════
@@ -1048,6 +1158,44 @@ async def release_bacnet(req: ReleaseRequest):
         return {"success": ok, "priority": pri}
 
 
+@app.post("/api/bacnet/write_property")
+async def write_bacnet_property(req: WritePropertyRequest):
+    """Write any BACnet property by name.
+
+    Useful for properties beyond presentValue, e.g.:
+    - relinquishDefault: clear the fallback value stored in device NVM
+    - outOfService: put a point offline to prevent controller override
+    - covIncrement, highLimit, lowLimit, etc.
+
+    Body example:
+        {"device_id": 10121, "object_type": "analog-value",
+         "object_instance": 29, "property_name": "relinquishDefault", "value": 0}
+    """
+    if not bacnet_service:
+        return JSONResponse({"error": "BACnet service not available"}, status_code=500)
+    address = _resolve_address(req.device_id)
+    if not address:
+        return JSONResponse({"error": f"Device {req.device_id} not found"}, status_code=404)
+
+    ok, err = await bacnet_service.write_property(
+        address,
+        req.object_type,
+        req.object_instance,
+        req.property_name,
+        req.value,
+        req.priority,
+    )
+    if ok:
+        return {
+            "success": True,
+            "device_id": req.device_id,
+            "object": f"{req.object_type}:{req.object_instance}",
+            "property": req.property_name,
+            "value": req.value,
+        }
+    return JSONResponse({"success": False, "error": err or "Write rejected by device"}, status_code=200)
+
+
 @app.get("/api/bacnet/priority_array/{device_id}/{object_type}/{object_instance}")
 async def read_priority_array(device_id: int, object_type: str, object_instance: int):
     """Read the 16-level priority array of a BACnet object."""
@@ -1414,7 +1562,28 @@ async def export_summary():
 # ═══════════════════════════════════════════════
 @app.get("/api/mappings")
 async def list_mappings():
-    return {"mappings": [m.model_dump() for m in config_manager.mappings]}
+    import math
+
+    def _sanitize(val):
+        """Replace any non-JSON-compliant float (inf, -inf, nan) with None."""
+        if isinstance(val, float) and not math.isfinite(val):
+            return None
+        if isinstance(val, dict):
+            return {k: _sanitize(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [_sanitize(v) for v in val]
+        return val
+
+    results = []
+    for m in config_manager.mappings:
+        try:
+            d = m.model_dump()
+            d = _sanitize(d)
+            results.append(d)
+        except Exception as e:
+            logger.error("Error dumping mapping %s: %s", getattr(m, 'id', '?'), e)
+            continue
+    return {"mappings": results}
 
 
 @app.post("/api/mappings")
@@ -1469,6 +1638,23 @@ async def delete_mapping(mapping_id: str):
     if not removed:
         return JSONResponse({"error": "Mapping not found"}, status_code=404)
     return {"status": "deleted"}
+
+
+@app.post("/api/mappings/bulk-delete")
+async def bulk_delete_mappings(body: dict[str, Any]):
+    """Delete multiple mappings by ID in a single request."""
+    ids = body.get("ids", [])
+    if not ids:
+        return JSONResponse({"error": "No IDs provided"}, status_code=400)
+    deleted = 0
+    not_found = []
+    for mid in ids:
+        removed = config_manager.remove_mapping(str(mid))
+        if removed:
+            deleted += 1
+        else:
+            not_found.append(mid)
+    return {"deleted": deleted, "not_found": not_found}
 
 
 @app.put("/api/mappings/{mapping_id}/alarm")
