@@ -553,7 +553,7 @@ class MstpHealthAnalyzer:
                     decoded = decode_bacnet_frame(frame.data, frame.src, frame.dst, now)
                     if decoded and decoded.service:
                         entry = decoded.to_dict()
-                        entry["raw_hex"] = frame.raw_bytes.hex()
+                        entry["raw_hex"] = frame.data.hex()
                         # Dedup: chỉ gộp nếu các bản tin giống hệt nhau và CÁCH NHAU < 1 GIÂY (burst/storm)
                         # Poll bình thường (vd 5s/lần) sẽ giữ nguyên để dễ hình dung luồng
                         deduped = False
@@ -578,8 +578,8 @@ class MstpHealthAnalyzer:
                         if self._on_conversation:
                             entry["count"] = self._conversations[-1].get("count", 1) if deduped else 1
                             self._on_conversation(entry)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[Decoder] Failed to decode frame src=%d dst=%d: %s", frame.src, frame.dst, exc)
 
     def _try_parse_iam(self, frame: MstpFrame) -> None:
         """Parse I-Am APDU: extract device instance, max_apdu, segmentation, vendor_id.
