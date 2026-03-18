@@ -261,6 +261,92 @@ def build_read_property(device_instance: int, obj_type: int, obj_instance: int,
     return npdu + apdu_hdr + tag0 + tag1
 
 
+def build_write_property(device_instance: int, obj_type: int, obj_instance: int,
+                         prop_id: int, value, priority: int | None = None,
+                         invoke_id: int = 1) -> bytes:
+    """BACnet WriteProperty confirmed request (service=15)."""
+    npdu = bytes([0x01, 0x04])
+
+    pdu_type = 0x00  # confirmed-request
+    max_resp = 0x05
+    apdu_hdr = bytes([pdu_type, max_resp, invoke_id, 0x0F])  # service=15=WriteProperty
+
+    # Context tag 0: ObjectIdentifier
+    oid = (obj_type << 22) | (obj_instance & 0x3FFFFF)
+    tag0 = bytes([0x0C]) + struct.pack('>I', oid)
+
+    # Context tag 1: PropertyIdentifier
+    if prop_id <= 0xFF:
+        tag1 = bytes([0x19, prop_id])
+    else:
+        tag1 = bytes([0x1A, (prop_id >> 8) & 0xFF, prop_id & 0xFF])
+
+    # Context tag 3 (opening): propertyValue
+    tag3_open = bytes([0x3E])
+    # Encode value as application-tagged
+    if isinstance(value, float):
+        val_bytes = bytes([0x44]) + struct.pack('>f', value)  # Real (tag 4, len 4)
+    elif isinstance(value, bool):
+        val_bytes = bytes([0x11 if value else 0x10])  # Boolean
+    elif isinstance(value, int):
+        if value < 0:
+            # Signed integer
+            if -128 <= value <= 127:
+                val_bytes = bytes([0x31, value & 0xFF])
+            else:
+                val_bytes = bytes([0x32]) + struct.pack('>h', value)
+        else:
+            # Unsigned
+            if value <= 0xFF:
+                val_bytes = bytes([0x21, value])
+            elif value <= 0xFFFF:
+                val_bytes = bytes([0x22, (value >> 8) & 0xFF, value & 0xFF])
+            else:
+                val_bytes = bytes([0x24]) + struct.pack('>I', value)
+    elif isinstance(value, str) and value in ('active', 'inactive'):
+        # BACnet Enumerated for binary objects
+        val_bytes = bytes([0x91, 1 if value == 'active' else 0])
+    else:
+        # Try as unsigned
+        val_bytes = bytes([0x21, int(value)])
+    tag3_close = bytes([0x3F])
+
+    result = npdu + apdu_hdr + tag0 + tag1 + tag3_open + val_bytes + tag3_close
+
+    # Context tag 4: priority (optional)
+    if priority is not None and 1 <= priority <= 16:
+        result += bytes([0x49, priority])
+
+    return result
+
+
+def build_reinitialize_device(state: int = 0, password: str = "",
+                               invoke_id: int = 1) -> bytes:
+    """BACnet ReinitializeDevice confirmed request (service=20).
+    state: 0=coldstart, 1=warmstart
+    """
+    npdu = bytes([0x01, 0x04])
+    pdu_type = 0x00
+    max_resp = 0x05
+    apdu_hdr = bytes([pdu_type, max_resp, invoke_id, 0x14])  # service=20
+
+    # Context tag 0: ReinitializedStateOfDevice (Enumerated)
+    tag0 = bytes([0x09, state])
+
+    result = npdu + apdu_hdr + tag0
+
+    # Context tag 1: password (optional CharacterString)
+    if password:
+        pwd_bytes = bytes([0]) + password.encode('utf-8')  # encoding=0 (UTF-8)
+        plen = len(pwd_bytes)
+        if plen <= 4:
+            result += bytes([0x10 | plen]) + pwd_bytes
+        elif plen <= 253:
+            result += bytes([0x15, plen]) + pwd_bytes
+
+    return result
+
+
 def parse_iam(data: bytes) -> dict | None:
     """Parse I-Am from a BACnet NPDU+APDU payload."""
     if len(data) < 4 or data[0] != 0x01:

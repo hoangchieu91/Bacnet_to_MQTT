@@ -31,6 +31,7 @@ from health_monitor import HealthMonitor
 from bridge import MstpBridge
 from mstp_sniffer import MstpSniffer, Pathology
 from point_discovery import DiscoveryRunner
+from bacnet_commander import CommandRunner
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ _sniffer: MstpSniffer | None  = None
 _clients: set[WebSocket]       = set()
 _pathology_history: collections.deque = collections.deque(maxlen=2000)
 _discovery: DiscoveryRunner    = DiscoveryRunner()
+_commander: CommandRunner      = CommandRunner()
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -382,6 +384,74 @@ async def trigger_scan() -> dict:
         raise HTTPException(status_code=503, detail="Scanner unavailable — running in sniffer-only mode")
     asyncio.create_task(_monitor._scan_cycle())
     return {"status": "scan triggered"}
+
+
+# ── Commander API ─────────────────────────────────────────────────────────────
+
+@app.post("/api/command")
+async def send_command(body: dict) -> dict:
+    """Send a BACnet command (read/write/reinit) to a target device.
+    Body: {command, target_mac, obj_type, obj_instance, prop_id, value, priority, device_instance, reinit_state, password}
+    """
+    if _commander.is_running:
+        raise HTTPException(status_code=409, detail="Command already running")
+
+    cmd = body.get("command", "read")
+    target_mac = body.get("target_mac")
+    if target_mac is None:
+        raise HTTPException(status_code=400, detail="target_mac required")
+
+    # Read serial config
+    with open("config.yaml") as f:
+        cfg = yaml.safe_load(f)
+    serial_cfg = cfg.get("serial", {})
+    port = serial_cfg.get("port", "/dev/ttyUSB0")
+    baud = serial_cfg.get("baudrate", 38400)
+    my_mac = serial_cfg.get("mac", 127)
+
+    # Pause sniffer
+    sniffer_was_running = False
+    if _sniffer and _sniffer._running:
+        sniffer_was_running = True
+        await _sniffer.stop()
+        await asyncio.sleep(0.5)
+
+    # Start command in thread
+    kwargs = {k: v for k, v in body.items() if k not in ('command', 'target_mac')}
+    # Convert value types
+    if 'value' in kwargs:
+        v = kwargs['value']
+        try:
+            if '.' in str(v): kwargs['value'] = float(v)
+            else: kwargs['value'] = int(v)
+        except (ValueError, TypeError):
+            pass
+
+    _commander.start(port, baud, target_mac, cmd, my_mac=my_mac, **kwargs)
+
+    # Wait and resume sniffer
+    async def _wait():
+        while _commander.is_running:
+            await asyncio.sleep(0.5)
+        if sniffer_was_running and _sniffer:
+            try:
+                await _sniffer.start()
+            except Exception as exc:
+                logger.error("[Commander] Failed to resume sniffer: %s", exc)
+        if _commander.result:
+            await _broadcast({"type": "command_result", **_commander.result})
+
+    asyncio.create_task(_wait())
+    return {"status": "started", "command": cmd, "target_mac": target_mac}
+
+
+@app.get("/api/command/status")
+async def command_status() -> dict:
+    if _commander.result:
+        return _commander.result
+    if _commander.is_running:
+        return {"status": "running"}
+    return {"status": "idle"}
 
 
 @app.get("/api/mode")

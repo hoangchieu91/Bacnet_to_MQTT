@@ -1100,6 +1100,8 @@ function connect(){
       addConversation(msg);
     } else if(msg.type==='discovery_progress' || msg.type==='discovery_done'){
       handleDiscoveryWS(msg);
+    } else if(msg.type==='command_result'){
+      handleCommandWS(msg);
     }
     renderGrid();
   };
@@ -1260,6 +1262,68 @@ function renderDetail(id){
     <button class="btn-discover" onclick="event.stopPropagation();startDiscovery(${id})">🔍 Discover Points</button>
     <span style="font-size:10px;color:var(--muted);margin-left:8px;">Quét Object List (tạm dừng Sniffer ~30s)</span>
   </div>`;
+
+  // Commander panel
+  html += `<div class="detail-section">
+    <div class="detail-section-title">⚡ BACnet Commander</div>
+    <div style="font-size:11px;display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Object Type</label>
+        <select id="cmdObjType" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+          <option value="0">AI (Analog Input)</option>
+          <option value="1">AO (Analog Output)</option>
+          <option value="2">AV (Analog Value)</option>
+          <option value="3">BI (Binary Input)</option>
+          <option value="4">BO (Binary Output)</option>
+          <option value="5">BV (Binary Value)</option>
+          <option value="13">MSI (Multi-State Input)</option>
+          <option value="14">MSO (Multi-State Output)</option>
+          <option value="19">MSV (Multi-State Value)</option>
+          <option value="8">Device</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Instance</label>
+        <input id="cmdObjInst" type="number" value="0" min="0" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+      </div>
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Property</label>
+        <select id="cmdPropId" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+          <option value="85">presentValue (85)</option>
+          <option value="77">objectName (77)</option>
+          <option value="28">description (28)</option>
+          <option value="117">units (117)</option>
+          <option value="36">eventState (36)</option>
+          <option value="111">statusFlags (111)</option>
+          <option value="103">reliability (103)</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Value (Write)</label>
+        <input id="cmdValue" type="text" placeholder="e.g. 25.5" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+      </div>
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Priority (Write)</label>
+        <select id="cmdPriority" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+          <option value="">None</option>
+          <option value="1">1 - Manual Life Safety</option>
+          <option value="8" selected>8 - Manual Operator</option>
+          <option value="16">16 - Default/Available</option>
+        </select>
+      </div>
+      <div>
+        <label style="color:var(--muted);font-size:10px;">Device Instance</label>
+        <input id="cmdDevInst" type="number" value="${devIds[0] || 0}" style="width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:4px;border-radius:4px;font-size:11px;">
+      </div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button class="btn-discover" onclick="event.stopPropagation();sendBACnetCommand('read',${id})" style="font-size:11px;padding:4px 10px;">📖 Read</button>
+      <button class="btn-discover" onclick="event.stopPropagation();sendBACnetCommand('write',${id})" style="background:linear-gradient(135deg,#f59e0b,#ef4444);font-size:11px;padding:4px 10px;">✏️ Write</button>
+      <button class="btn-discover" onclick="event.stopPropagation();if(confirm('⚠️ Warm Restart thiết bị MAC ${id}?'))sendBACnetCommand('reinit',${id})" style="background:linear-gradient(135deg,#dc2626,#991b1b);font-size:11px;padding:4px 10px;">🔄 Reinit</button>
+    </div>
+    <div id="cmdResult" style="margin-top:8px;font-size:11px;padding:6px;background:var(--surface2);border-radius:4px;display:none;"></div>
+  </div>`;
+
 
   // Quick help
   html += `<div class="detail-section"><div class="detail-section-title">Giải thích</div>
@@ -1586,6 +1650,49 @@ async function startDiscovery(mac) {
 
 function closeDiscovery() {
   document.getElementById('discOverlay').classList.remove('open');
+}
+
+// ── BACnet Commander ──────────────────────────────────────────────────────────
+async function sendBACnetCommand(cmd, mac) {
+  const r = document.getElementById('cmdResult');
+  r.style.display = 'block';
+  r.innerHTML = `<span style="color:var(--accent)">⏳ Sending ${cmd} to MAC ${mac}...</span>`;
+
+  const body = {
+    command: cmd,
+    target_mac: mac,
+    obj_type: parseInt(document.getElementById('cmdObjType').value),
+    obj_instance: parseInt(document.getElementById('cmdObjInst').value),
+    prop_id: parseInt(document.getElementById('cmdPropId').value),
+    device_instance: parseInt(document.getElementById('cmdDevInst').value),
+  };
+  if (cmd === 'write') {
+    body.value = document.getElementById('cmdValue').value;
+    const pri = document.getElementById('cmdPriority').value;
+    if (pri) body.priority = parseInt(pri);
+  }
+  if (cmd === 'reinit') {
+    body.reinit_state = 1; // warmstart
+  }
+
+  try {
+    await fetch('/api/command', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  } catch(e) {
+    r.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+  }
+}
+
+function handleCommandWS(msg) {
+  const r = document.getElementById('cmdResult');
+  if (!r) return;
+  r.style.display = 'block';
+  if (msg.status === 'ok') {
+    const val = msg.value != null ? msg.value : (msg.note || 'OK');
+    r.innerHTML = `<span style="color:var(--green)">✅ ${msg.command}: <b>${val}</b></span>`;
+    if (msg.property) r.innerHTML += ` <span style="color:var(--muted)">(${msg.property})</span>`;
+  } else {
+    r.innerHTML = `<span style="color:var(--red)">❌ ${msg.error || 'Unknown error'}</span>`;
+  }
 }
 
 function handleDiscoveryWS(msg) {
