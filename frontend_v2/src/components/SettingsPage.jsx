@@ -348,6 +348,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [mstpLoading, setMstpLoading] = useState(false);
+  const [mstpToast, setMstpToast] = useState(null);
   const [tab, setTab] = useState('bacnet');
 
   const fetchConfig = useCallback(async () => {
@@ -435,13 +436,41 @@ export function SettingsPage() {
 
   const toggleMstp = async () => {
     setMstpLoading(true);
+    setMstpToast(null);
     try {
-      const endpoint = mstpStatus.connected ? `${API}/mstp/disable` : `${API}/mstp/enable`;
-      await fetch(endpoint, { method: 'POST' });
+      const isDisabling = mstpStatus.connected;
+      const endpoint = isDisabling ? `${API}/mstp/disable` : `${API}/mstp/enable`;
+      const res = await fetch(endpoint, { method: 'POST' });
+      const data = await res.json();
       // Refresh status
       const ms = await fetch(`${API}/mstp/status`).then(r => r.json());
       setMstpStatus(ms);
-    } catch (e) { console.error(e); }
+
+      if (isDisabling) {
+        setMstpToast({
+          type: 'success',
+          title: 'Gateway MS/TP đã tắt',
+          message: ms.mstp_tools_active
+            ? '🔍 MS/TP Tools đã tự bật lại — Sniffer đang hoạt động trở lại.'
+            : 'Serial port đã được giải phóng.'
+        });
+      } else {
+        if (data.error) {
+          setMstpToast({ type: 'error', title: 'Lỗi khi bật MS/TP', message: data.error });
+        } else {
+          setMstpToast({
+            type: 'success',
+            title: 'Gateway MS/TP đã bật',
+            message: '🔌 MS/TP Tools đã tự tắt để nhường cổng serial. Gateway đang poll MS/TP points.'
+          });
+        }
+      }
+      // Auto-dismiss toast after 5s
+      setTimeout(() => setMstpToast(null), 5000);
+    } catch (e) {
+      setMstpToast({ type: 'error', title: 'Lỗi kết nối', message: e.message });
+      setTimeout(() => setMstpToast(null), 5000);
+    }
     setMstpLoading(false);
   };
 
@@ -521,16 +550,64 @@ export function SettingsPage() {
       {/* MS/TP Tab */}
       {tab === 'mstp' && (
         <Section title="MS/TP Serial Configuration">
-          {/* Status + Toggle */}
+          {/* Serial Port Ownership — who's using the port? */}
+          <div className="mb-5 p-3 bg-bg-input/30 border border-border/30 rounded-lg">
+            <div className="text-[10px] uppercase tracking-wider text-text-muted mb-2 font-semibold">Serial Port Status</div>
+            <div className="flex items-center gap-3 flex-wrap">
+              {/* MS/TP Tools badge */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
+                mstpStatus.mstp_tools_active
+                  ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                  : 'bg-bg-input/50 text-text-muted border-border/30'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${mstpStatus.mstp_tools_active ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
+                🔍 MS/TP Tools (Sniffer)
+              </div>
+              {/* Gateway MS/TP badge */}
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${
+                mstpStatus.connected
+                  ? 'bg-blue-500/15 text-blue-400 border-blue-500/30'
+                  : 'bg-bg-input/50 text-text-muted border-border/30'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${mstpStatus.connected ? 'bg-blue-400 animate-pulse' : 'bg-gray-600'}`} />
+                🌐 Gateway MS/TP (Polling)
+              </div>
+              {/* Port info */}
+              <div className="text-[10px] text-text-muted ml-auto">
+                {mstpStatus.port || mstp.port} @ {mstpStatus.baudrate || mstp.baudrate} baud
+              </div>
+            </div>
+          </div>
+
+          {/* Toast notification area */}
+          {mstpToast && (
+            <div className={`mb-4 p-3 rounded-lg border text-sm flex items-start gap-2 animate-fadeIn ${
+              mstpToast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                : mstpToast.type === 'warning' ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                : 'bg-red-500/10 border-red-500/30 text-red-300'
+            }`}>
+              <span className="mt-0.5">{mstpToast.type === 'success' ? '✅' : mstpToast.type === 'warning' ? '⚠️' : '❌'}</span>
+              <div>
+                <div className="font-medium">{mstpToast.title}</div>
+                <div className="text-[11px] opacity-80 mt-0.5">{mstpToast.message}</div>
+              </div>
+            </div>
+          )}
+
+          {/* Toggle Control */}
           <div className="flex items-center justify-between mb-5 p-3 bg-bg-input/40 border border-border/30 rounded-lg">
             <div className="flex items-center gap-3">
-              <Usb size={18} className={mstpStatus.connected ? 'text-success' : 'text-text-muted'} />
+              <Usb size={18} className={mstpStatus.connected ? 'text-blue-400' : 'text-text-muted'} />
               <div>
                 <div className="text-sm font-medium text-white">
-                  MS/TP {mstpStatus.connected ? 'Connected' : mstpStatus.enabled ? 'Enabled (disconnected)' : 'Disabled'}
+                  Gateway MS/TP {mstpStatus.connected ? 'Active' : 'Inactive'}
                 </div>
                 <div className="text-[10px] text-text-muted">
-                  {mstpStatus.port || mstp.port} @ {mstpStatus.baudrate || mstp.baudrate} baud · MAC {mstpStatus.mac || mstp.mac}
+                  {mstpStatus.connected
+                    ? `Đang poll points trên ${mstpStatus.port} · MAC ${mstpStatus.mac}`
+                    : mstpStatus.mstp_tools_active
+                      ? '🔍 MS/TP Tools đang dùng cổng serial (ưu tiên mặc định)'
+                      : 'Cả hai service đều tắt'}
                   {mstpStatus.devices_cached > 0 && ` · ${mstpStatus.devices_cached} devices cached`}
                 </div>
               </div>
@@ -539,10 +616,10 @@ export function SettingsPage() {
               className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 mstpStatus.connected
                   ? 'bg-error/20 text-error border border-error/30 hover:bg-error/30'
-                  : 'bg-success/20 text-success border border-success/30 hover:bg-success/30'
+                  : 'bg-blue-500/20 text-blue-400 border border-blue-500/30 hover:bg-blue-500/30'
               } disabled:opacity-50`}>
               {mstpLoading ? <Loader2 size={14} className="animate-spin" /> : mstpStatus.connected ? <PowerOff size={14} /> : <Power size={14} />}
-              {mstpStatus.connected ? 'Disable' : 'Enable'}
+              {mstpStatus.connected ? 'Disable Gateway MS/TP' : 'Enable Gateway MS/TP'}
             </button>
           </div>
 
@@ -565,8 +642,11 @@ export function SettingsPage() {
 
           <div className="mt-4 p-3 bg-bg-input rounded-lg border border-border/50">
             <p className="text-[11px] text-text-muted">
-              <span className="text-accent-primary font-bold">Note:</span> MS/TP sử dụng cổng serial RS-485. Đảm bảo không có service khác đang dùng port (vd: mstp-tools). 
-              Sau khi Enable, gateway sẽ tự join token ring và bắt đầu poll các point có transport="mstp".
+              <span className="text-accent-primary font-bold">Chống xung đột:</span> Cổng serial chỉ cho 1 service dùng cùng lúc.
+              Khi bật Gateway MS/TP → MS/TP Tools tự tắt. Khi tắt → MS/TP Tools tự bật lại.
+              <br />
+              <span className="text-amber-400 font-bold">Mặc định:</span> MS/TP Tools (Sniffer+Discovery) được ưu tiên.
+              Gateway MS/TP chỉ bật khi bạn cần poll realtime.
             </p>
           </div>
         </Section>

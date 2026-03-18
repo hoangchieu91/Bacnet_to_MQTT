@@ -596,6 +596,16 @@ async def update_mstp_config(cfg: MstpConfig):
 
 @app.get("/api/mstp/status")
 async def get_mstp_status():
+    # Check if mstp-tools.service is running
+    import subprocess
+    mstp_tools_active = False
+    try:
+        r = subprocess.run(["systemctl", "is-active", "mstp-tools"],
+                           capture_output=True, text=True, timeout=3)
+        mstp_tools_active = r.stdout.strip() == "active"
+    except Exception:
+        pass
+
     return {
         "enabled": config_manager.config.mstp.enabled,
         "connected": mstp_service.connected if mstp_service else False,
@@ -603,6 +613,7 @@ async def get_mstp_status():
         "baudrate": config_manager.config.mstp.baudrate,
         "mac": config_manager.config.mstp.mac,
         "devices_cached": len(mstp_service._devices) if mstp_service else 0,
+        "mstp_tools_active": mstp_tools_active,
     }
 
 
