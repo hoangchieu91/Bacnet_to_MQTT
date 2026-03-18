@@ -343,7 +343,7 @@ async def start_discovery(mac: int) -> dict:
         await asyncio.sleep(1.0)  # Let serial port settle fully
 
     # Start discovery in thread
-    _discovery.start(port, baud, mac, my_mac=my_mac, duration=60.0,
+    _discovery.start(port, baud, mac, my_mac=my_mac, duration=180.0,
                      known_device_instance=known_dev)
 
     # Monitor thread and resume sniffer when done

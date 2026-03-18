@@ -236,7 +236,7 @@ def build_whois() -> bytes:
 
 
 def build_read_property(device_instance: int, obj_type: int, obj_instance: int,
-                        prop_id: int, invoke_id: int = 1) -> bytes:
+                        prop_id: int, invoke_id: int = 1, array_index: int | None = None) -> bytes:
     """BACnet ReadProperty confirmed request."""
     # NPDU: version=1, ctrl=0x04 (expecting reply, no routing)
     npdu = bytes([0x01, 0x04])
@@ -258,7 +258,16 @@ def build_read_property(device_instance: int, obj_type: int, obj_instance: int,
     else:
         tag1 = bytes([0x1A, (prop_id >> 8) & 0xFF, prop_id & 0xFF])
 
-    return npdu + apdu_hdr + tag0 + tag1
+    tag2 = b""
+    if array_index is not None:
+        if array_index <= 0xFF:
+            tag2 = bytes([0x29, array_index])
+        elif array_index <= 0xFFFF:
+            tag2 = bytes([0x2A, (array_index >> 8) & 0xFF, array_index & 0xFF])
+        else:
+            tag2 = bytes([0x2B, (array_index >> 16) & 0xFF, (array_index >> 8) & 0xFF, array_index & 0xFF])
+
+    return npdu + apdu_hdr + tag0 + tag1 + tag2
 
 
 def build_write_property(device_instance: int, obj_type: int, obj_instance: int,
@@ -457,6 +466,11 @@ def parse_read_property_ack(data: bytes) -> dict | None:
             pid = (pid << 8) | data[offset + 1 + i]
         result['property'] = PROP_NAMES.get(pid, str(pid))
         offset += 1 + plen
+
+    # Optional context tag 2: arrayIndex — skip if present
+    if offset < len(data) and (data[offset] & 0xF8) == 0x28:
+        alen = data[offset] & 0x07
+        offset += 1 + alen
 
     # Context tag 3 (opening): propertyValue
     if offset < len(data) and data[offset] == 0x3E:
@@ -709,10 +723,11 @@ class MstpMaster:
 
     def queue_read_property(self, dst_mac: int, device_instance: int,
                             obj_type: int, obj_instance: int,
-                            prop_id: int, invoke_id: int = 1) -> None:
+                            prop_id: int, invoke_id: int = 1,
+                            array_index: int | None = None) -> None:
         """Queue a ReadProperty request."""
         self._pending_request = build_read_property(
-            device_instance, obj_type, obj_instance, prop_id, invoke_id)
+            device_instance, obj_type, obj_instance, prop_id, invoke_id, array_index)
         self._pending_dst = dst_mac
         self._pending_expects_reply = True
 
