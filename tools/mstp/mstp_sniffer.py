@@ -392,6 +392,13 @@ class NodeStats:
     inter_frame_gaps: list[float] = field(default_factory=list)  # ms: gap between consecutive frames from this node
     last_frame_ts: float = 0.0  # timestamp of last frame from this node
 
+    # Request/Reply tracking — passive offline detection
+    last_reply: float = 0.0           # perf_counter when node last replied (ACK, ComplexACK, RPFM)
+    total_requests_to: int = 0        # total confirmed requests SENT TO this node
+    total_replies_from: int = 0       # total ACK/replies FROM this node
+    unanswered_streak: int = 0        # consecutive requests without reply
+    last_requested_at: float = 0.0    # when the latest request to this node was sent
+
 
 @dataclass
 class Pathology:
@@ -521,7 +528,7 @@ class MstpHealthAnalyzer:
                 ns.inter_frame_gaps = ns.inter_frame_gaps[-200:]
         ns.last_frame_ts = now
 
-        # Timing: reply delay tracking
+        # Timing: reply delay tracking + request/reply offline detection
         if frame.is_bacnet and len(frame.data) >= 3:
             pdu_type = (frame.data[2] >> 4) if len(frame.data) > 2 else -1
             # Check NPDU offset: version + ctrl, skip routing
@@ -531,9 +538,13 @@ class MstpHealthAnalyzer:
             if ctrl & 0x08: apdu_off += 4  # SNET+SLEN
             if apdu_off < len(frame.data):
                 pdu_type = (frame.data[apdu_off] >> 4) & 0x0F
-                if pdu_type == 0:  # Confirmed request
+                if pdu_type == 0:  # Confirmed request (src asks dst)
                     self._pending_requests[(frame.src, frame.dst)] = now
-                elif pdu_type in (2, 3):  # SimpleAck or ComplexAck
+                    # Track: someone asked this destination node
+                    dst_ns = self._nodes.setdefault(frame.dst, NodeStats(mac=frame.dst))
+                    dst_ns.total_requests_to += 1
+                    dst_ns.last_requested_at = now
+                elif pdu_type in (2, 3):  # SimpleAck or ComplexAck (reply)
                     key = (frame.dst, frame.src)  # original request dir
                     if key in self._pending_requests:
                         delay_ms = (now - self._pending_requests[key]) * 1000
@@ -543,6 +554,32 @@ class MstpHealthAnalyzer:
                             if len(src_ns.reply_delays) > 200:
                                 src_ns.reply_delays = src_ns.reply_delays[-200:]
                         del self._pending_requests[key]
+                    # Track reply: this node responded
+                    ns.total_replies_from += 1
+                    ns.last_reply = now
+                    ns.unanswered_streak = 0  # reset streak on reply
+                elif pdu_type == 5:  # Error PDU — also a response
+                    key = (frame.dst, frame.src)
+                    if key in self._pending_requests:
+                        del self._pending_requests[key]
+                    ns.total_replies_from += 1
+                    ns.last_reply = now
+                    ns.unanswered_streak = 0
+
+        # PFM reply tracking: Reply-to-PFM counts as responsive
+        # Reply-to-Poll tracking: counts as responsive
+        if frame.frame_type == FT.REPLY_TO_POLL:
+            ns.last_reply = now
+            ns.unanswered_streak = 0
+
+        # Timeout stale pending requests (> 3s old) → mark as unanswered
+        stale_keys = [k for k, ts in self._pending_requests.items() if now - ts > 3.0]
+        for k in stale_keys:
+            del self._pending_requests[k]
+            _, dst_mac = k
+            dst_ns = self._nodes.get(dst_mac)
+            if dst_ns:
+                dst_ns.unanswered_streak += 1
 
         # BACnet payload analysis (I-Am → extract device instance)
         if frame.is_bacnet and len(frame.data) >= 6:
@@ -836,6 +873,11 @@ class MstpHealthAnalyzer:
                     FRAME_TYPE_NAMES.get(ft, hex(ft)): cnt
                     for ft, cnt in ns.frame_types.items()
                 },
+                "online": self._is_node_online(ns),
+                "responsiveness": round(ns.total_replies_from / ns.total_requests_to * 100, 1) if ns.total_requests_to > 0 else None,
+                "unanswered_streak": ns.unanswered_streak,
+                "total_requests_to": ns.total_requests_to,
+                "total_replies_from": ns.total_replies_from,
             })
 
         bits_used = self._total_bytes * 10
@@ -877,6 +919,26 @@ class MstpHealthAnalyzer:
             ],
         }
 
+    def _is_node_online(self, ns: 'NodeStats') -> bool:
+        """Determine if a node is online using 3 signals:
+        1. Active: recently transmitted a frame (token, data, pfm)
+        2. Responsive: recently replied to a request
+        3. Unresponsive: 3+ consecutive unanswered requests
+        """
+        now = time.perf_counter()
+        # Signal 1: actively seen on bus
+        active = ns.last_seen > 0 and (now - ns.last_seen) < 30
+        # Signal 2: responded to someone recently  
+        responsive = ns.last_reply > 0 and (now - ns.last_reply) < 60
+        # Signal 3: extended unanswered streak
+        unresponsive = ns.unanswered_streak >= 3
+
+        if active or responsive:
+            return True
+        if unresponsive:
+            return False
+        return ns.last_seen > 0  # fallback: was ever seen
+
     def get_topology(self) -> dict:
         """Return token ring topology and traffic matrix for visualization."""
         VENDOR_NAMES = {
@@ -893,7 +955,9 @@ class MstpHealthAnalyzer:
                 "vendor": VENDOR_NAMES.get(ns.vendor_id, f"V{ns.vendor_id}") if ns.vendor_id else "",
                 "frames": ns.total_frames,
                 "bad_crc": ns.bad_crc_frames,
-                "online": ns.last_seen > 0 and (time.perf_counter() - ns.last_seen) < 30,
+                "online": self._is_node_online(ns),
+                "responsiveness": round(ns.total_replies_from / ns.total_requests_to * 100, 1) if ns.total_requests_to > 0 else None,
+                "unanswered_streak": ns.unanswered_streak,
             })
 
         # Token ring edges (sorted by count desc)

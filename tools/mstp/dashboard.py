@@ -191,7 +191,7 @@ def _sniffer_nodes_as_grid() -> list[dict]:
         dev_label = f"Device {device_ids[0]}" if device_ids else ""
         nodes.append({
             "address": mac,
-            "online": True,
+            "online": ns.get("online", True),
             "name": f"Node {mac}" + (f" ({dev_label})" if dev_label else ""),
             "vendor": vendor_name,
             "vendor_id": vendor_id,
@@ -209,6 +209,10 @@ def _sniffer_nodes_as_grid() -> list[dict]:
             "token_avg_ms": ns.get("token_avg_ms"),
             "token_max_ms": ns.get("token_max_ms"),
             "frame_types": ns.get("frame_types", {}),
+            "responsiveness": ns.get("responsiveness"),
+            "unanswered_streak": ns.get("unanswered_streak", 0),
+            "total_requests_to": ns.get("total_requests_to", 0),
+            "total_replies_from": ns.get("total_replies_from", 0),
             "source": "sniffer",
         })
     return nodes
