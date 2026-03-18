@@ -534,6 +534,21 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
     </div>
   </div>
 
+  <!-- Token Ring Topology -->
+  <div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between;">
+      <span>🔗 Token Ring Topology</span>
+      <button class="btn btn-sm" onclick="loadTopology()">↻ Refresh</button>
+    </div>
+    <div id="topoContainer" style="display:flex;gap:20px;align-items:flex-start;">
+      <svg id="topoSvg" width="400" height="400" style="background:#0d1525;border-radius:10px;flex-shrink:0;"></svg>
+      <div id="topoInfo" style="font-size:12px;color:var(--muted);flex:1;">
+        <div style="margin-bottom:8px;font-weight:600;color:var(--text);">Traffic Matrix</div>
+        <div id="topoTraffic" style="max-height:300px;overflow-y:auto;"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Frame log -->
   <div class="card">
     <div class="card-title">Recent Frames</div>
@@ -1619,6 +1634,88 @@ function handleDiscoveryWS(msg) {
 }
 
 // ── Sniffer Tab ───────────────────────────────────────────────────────────────
+async function loadTopology() {
+  try {
+    const topo = await fetch('/api/topology').then(r=>r.json());
+    renderTopologyRing(topo);
+  } catch(e) { console.warn('Topology fetch failed', e); }
+}
+
+function renderTopologyRing(topo) {
+  const svg = document.getElementById('topoSvg');
+  const W = 400, H = 400, CX = W/2, CY = H/2, R = 150;
+  const nodes = topo.nodes || [];
+  const ring = topo.token_ring || [];
+  const traffic = topo.traffic || [];
+  
+  if (nodes.length === 0) {
+    svg.innerHTML = `<text x="${CX}" y="${CY}" text-anchor="middle" fill="#64748b" font-size="13">No nodes detected</text>`;
+    return;
+  }
+
+  // Position nodes in a circle
+  const positions = {};
+  nodes.forEach((n, i) => {
+    const angle = (2 * Math.PI * i / nodes.length) - Math.PI/2;
+    positions[n.mac] = {
+      x: CX + R * Math.cos(angle),
+      y: CY + R * Math.sin(angle),
+    };
+  });
+
+  let html = '';
+  // Draw token ring arrows
+  const maxEdge = Math.max(...ring.map(e=>e.count), 1);
+  ring.forEach(edge => {
+    const a = positions[edge.src], b = positions[edge.dst];
+    if (!a || !b) return;
+    const opacity = 0.2 + 0.6 * (edge.count / maxEdge);
+    html += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" 
+      stroke="#6366f1" stroke-width="1.5" stroke-opacity="${opacity}" 
+      marker-end="url(#arrowTok)"/>`;
+  });
+
+  // Draw traffic lines
+  const maxTraffic = Math.max(...traffic.map(t=>t.frames), 1);
+  traffic.slice(0, 20).forEach(t => {
+    const a = positions[t.src], b = positions[t.dst];
+    if (!a || !b) return;
+    const w = 1 + 3 * (t.frames / maxTraffic);
+    html += `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" 
+      stroke="#22c55e" stroke-width="${w}" stroke-opacity="0.3"/>`;
+  });
+
+  // Draw nodes
+  nodes.forEach(n => {
+    const p = positions[n.mac];
+    const color = n.online ? '#22c55e' : '#ef4444';
+    const r = n.bad_crc > 0 ? 14 : 12;
+    html += `<circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${color}" stroke="#1e293b" stroke-width="2"/>`;
+    html += `<text x="${p.x}" y="${p.y + 4}" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold">${n.mac}</text>`;
+    // Label below
+    const label = n.vendor || (n.device_ids.length ? `D${n.device_ids[0]}` : '');
+    if (label) {
+      html += `<text x="${p.x}" y="${p.y + 22}" text-anchor="middle" fill="#94a3b8" font-size="8">${label}</text>`;
+    }
+  });
+
+  // Defs for arrow markers
+  svg.innerHTML = `<defs>
+    <marker id="arrowTok" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#6366f1" opacity="0.7"/>
+    </marker>
+  </defs>` + html;
+
+  // Traffic matrix table
+  let thtml = '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
+  thtml += '<tr style="color:var(--muted)"><th style="text-align:left;padding:3px 6px;">Src</th><th>→</th><th style="text-align:left;padding:3px 6px;">Dst</th><th style="text-align:right;padding:3px 6px;">Frames</th></tr>';
+  traffic.slice(0, 15).forEach(t => {
+    thtml += `<tr><td style="padding:2px 6px;">MAC ${t.src}</td><td style="color:#22c55e">→</td><td style="padding:2px 6px;">MAC ${t.dst}</td><td style="text-align:right;padding:2px 6px;color:var(--yellow)">${t.frames}</td></tr>`;
+  });
+  thtml += '</table>';
+  document.getElementById('topoTraffic').innerHTML = thtml;
+}
+
 async function loadSniffer(){
   try{
     const [rpt, frames] = await Promise.all([
@@ -1629,6 +1726,7 @@ async function loadSniffer(){
     renderPathologies(rpt.pathologies||[]);
     renderNodeStats(rpt.nodes||[]);
     renderFrameLog(frames);
+    loadTopology();  // Also refresh topology
   }catch(e){console.warn('Sniffer fetch failed',e);}
 }
 

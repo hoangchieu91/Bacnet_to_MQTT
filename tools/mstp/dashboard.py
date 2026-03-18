@@ -412,6 +412,16 @@ async def bridge_point(node_id: int, obj_type: str, instance: int) -> dict:
     return pv.to_dict()
 
 
+# ── Topology API ──────────────────────────────────────────────────────────────
+
+@app.get("/api/topology")
+async def get_topology() -> dict:
+    """Return token ring topology and traffic matrix for visualization."""
+    if not _sniffer:
+        return {"nodes": [], "token_ring": [], "traffic": []}
+    return _sniffer.analyzer.get_topology()
+
+
 # ── Sniffer API ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sniffer/report")

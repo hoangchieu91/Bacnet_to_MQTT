@@ -439,6 +439,11 @@ class MstpHealthAnalyzer:
 
         self.pathologies: list[Pathology] = []
 
+        # Token ring edge tracking: (src_mac, dst_mac) → count
+        self._token_edges: dict[tuple[int,int], int] = collections.defaultdict(int)
+        # Traffic matrix: (src_mac, dst_mac) → frame_count
+        self._traffic_matrix: dict[tuple[int,int], int] = collections.defaultdict(int)
+
         # BACnet APDU decoded conversations (rolling log)
         self._conversations: collections.deque[dict] = collections.deque(maxlen=60000)
         self._on_conversation: Callable[[dict], None] | None = None
@@ -494,6 +499,11 @@ class MstpHealthAnalyzer:
                 if len(ns.token_times) > 200:
                     ns.token_times = ns.token_times[-200:]
             self._token_holder[frame.dst] = now
+            self._token_edges[(frame.src, frame.dst)] += 1
+
+        # BACnet data traffic tracking
+        if frame.is_bacnet:
+            self._traffic_matrix[(frame.src, frame.dst)] += 1
 
         # BACnet payload analysis (I-Am → extract device instance)
         if frame.is_bacnet and len(frame.data) >= 6:
@@ -827,6 +837,40 @@ class MstpHealthAnalyzer:
                                 key=lambda x: {"critical": 0, "warning": 1, "info": 2}[x.severity])
             ],
         }
+
+    def get_topology(self) -> dict:
+        """Return token ring topology and traffic matrix for visualization."""
+        VENDOR_NAMES = {
+            5: "JCI", 7: "ALC", 8: "Delta", 15: "TAC", 17: "Honeywell",
+            24: "Alerton", 36: "Tridium", 95: "Reliable", 115: "Cylon",
+            169: "Distech", 260: "KMC", 343: "EasyIO", 365: "Loytec",
+            389: "Contemporary", 624: "Intesis",
+        }
+        nodes = []
+        for mac, ns in sorted(self._nodes.items()):
+            nodes.append({
+                "mac": mac,
+                "device_ids": sorted(ns.device_instances),
+                "vendor": VENDOR_NAMES.get(ns.vendor_id, f"V{ns.vendor_id}") if ns.vendor_id else "",
+                "frames": ns.total_frames,
+                "bad_crc": ns.bad_crc_frames,
+                "online": ns.last_seen > 0 and (time.perf_counter() - ns.last_seen) < 30,
+            })
+
+        # Token ring edges (sorted by count desc)
+        token_ring = [
+            {"src": s, "dst": d, "count": c}
+            for (s, d), c in sorted(self._token_edges.items(), key=lambda x: -x[1])
+        ]
+
+        # Traffic matrix top edges
+        traffic = [
+            {"src": s, "dst": d, "frames": c}
+            for (s, d), c in sorted(self._traffic_matrix.items(), key=lambda x: -x[1])
+            if c > 0
+        ]
+
+        return {"nodes": nodes, "token_ring": token_ring, "traffic": traffic}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
