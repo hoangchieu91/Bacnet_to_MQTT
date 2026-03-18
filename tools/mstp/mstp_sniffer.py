@@ -48,6 +48,32 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class PcapWriter:
+    """Writes BACnet MS/TP raw frames to a standard libpcap file."""
+    
+    DLT_BACNET_MS_TP = 165
+
+    def __init__(self, filepath: str):
+        self.filepath = filepath
+        self._f = open(filepath, "wb")
+        # Global Header: magic, version_major, version_minor, thiszone, sigfigs, snaplen, network
+        hdr = struct.pack('<IHHIIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, self.DLT_BACNET_MS_TP)
+        self._f.write(hdr)
+        self.count = 0
+
+    def write_frame(self, raw_bytes: bytes, timestamp: float) -> None:
+        """Writes a packet record containing the raw MS/TP bytes."""
+        ts_sec = int(timestamp)
+        ts_usec = int((timestamp - ts_sec) * 1_000_000)
+        length = len(raw_bytes)
+        # Packet Header: ts_sec, ts_usec, incl_len, orig_len
+        phdr = struct.pack('<IIII', ts_sec, ts_usec, length, length)
+        self._f.write(phdr)
+        self._f.write(raw_bytes)
+        self.count += 1
+        
+    def close(self) -> None:
+        self._f.close()
 # ═══════════════════════════════════════════════════════════════════════════════
 # MS/TP Frame Spec  (ASHRAE 135-2016 clause 9.3)
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -478,6 +504,7 @@ class MstpHealthAnalyzer:
                     decoded = decode_bacnet_frame(frame.data, frame.src, frame.dst, now)
                     if decoded and decoded.service:
                         entry = decoded.to_dict()
+                        entry["raw_hex"] = frame.raw_bytes.hex()
                         # Dedup: chỉ gộp nếu các bản tin giống hệt nhau và CÁCH NHAU < 1 GIÂY (burst/storm)
                         # Poll bình thường (vd 5s/lần) sẽ giữ nguyên để dễ hình dung luồng
                         deduped = False
@@ -835,6 +862,25 @@ class MstpSniffer:
         self._read_task: asyncio.Task | None = None
         self._diag_task: asyncio.Task | None = None
         self.frame_log: list[dict] = []   # rolling 500-frame log for dashboard
+        
+        # PCAP Capture
+        self._pcap_writer: PcapWriter | None = None
+
+    def start_capture(self, filepath: str = "/tmp/mstp_capture.pcap") -> None:
+        if self._pcap_writer:
+            self.stop_capture()
+        self._pcap_writer = PcapWriter(filepath)
+        logger.info("[Sniffer] Started PCAP capture to %s", filepath)
+
+    def stop_capture(self) -> dict:
+        info = {"active": False, "count": 0, "path": ""}
+        if self._pcap_writer:
+            info["count"] = self._pcap_writer.count
+            info["path"] = self._pcap_writer.filepath
+            self._pcap_writer.close()
+            self._pcap_writer = None
+            logger.info("[Sniffer] Stopped PCAP capture (%d frames)", info["count"])
+        return info
 
     @classmethod
     def from_config(cls, config_path: str = "config.yaml", **kwargs) -> "MstpSniffer":

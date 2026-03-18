@@ -30,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from health_monitor import HealthMonitor
 from bridge import MstpBridge
 from mstp_sniffer import MstpSniffer, Pathology
+from point_discovery import DiscoveryRunner
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ _bridge:  MstpBridge | None   = None
 _sniffer: MstpSniffer | None  = None
 _clients: set[WebSocket]       = set()
 _pathology_history: collections.deque = collections.deque(maxlen=2000)
+_discovery: DiscoveryRunner    = DiscoveryRunner()
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -260,6 +262,118 @@ async def get_stats() -> dict:
 async def get_pathologies() -> list[dict]:
     """Return recent pathology events (server-side history, survives page reload)."""
     return list(_pathology_history)
+
+
+@app.post("/api/capture/start")
+async def start_capture() -> dict:
+    if not _sniffer:
+        raise HTTPException(status_code=503, detail="Sniffer offline")
+    _sniffer.start_capture("/tmp/mstp_capture.pcap")
+    return {"status": "started"}
+
+
+@app.post("/api/capture/stop")
+async def stop_capture() -> dict:
+    if not _sniffer:
+        raise HTTPException(status_code=503, detail="Sniffer offline")
+    info = _sniffer.stop_capture()
+    return info
+
+
+@app.get("/api/capture/download")
+async def download_capture() -> FileResponse:
+    path = Path("/tmp/mstp_capture.pcap")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No capture file found")
+    return FileResponse(
+        path,
+        media_type="application/vnd.tcpdump.pcap",
+        filename=f"mstp_capture_{int(time.time())}.pcap"
+    )
+
+
+# ── Discovery API ─────────────────────────────────────────────────────────────
+
+@app.post("/api/discover/{mac}")
+async def start_discovery(mac: int) -> dict:
+    """Start auto-discovery of a target MAC's Object List.
+    Pauses sniffer, runs MstpMaster in thread, resumes sniffer when done."""
+    if _discovery.is_running:
+        raise HTTPException(status_code=409, detail="Discovery already running")
+
+    # Read serial config
+    with open("config.yaml") as f:
+        cfg = yaml.safe_load(f)
+    serial_cfg = cfg.get("serial", {})
+    port = serial_cfg.get("port", "/dev/ttyUSB0")
+    baud = serial_cfg.get("baudrate", 38400)
+    my_mac = serial_cfg.get("mac", 127)
+
+    # Pause sniffer to release serial port
+    sniffer_was_running = False
+    if _sniffer and _sniffer._running:
+        sniffer_was_running = True
+        await _sniffer.stop()
+        logger.info("[Discovery] Sniffer paused for discovery")
+        await asyncio.sleep(0.5)  # Let serial port settle
+
+    # Start discovery in thread
+    _discovery.start(port, baud, mac, my_mac=my_mac, duration=60.0)
+
+    # Monitor thread and resume sniffer when done
+    async def _wait_and_resume():
+        while _discovery.is_running:
+            # Broadcast progress
+            if _discovery.result:
+                await _broadcast({
+                    "type": "discovery_progress",
+                    "mac": mac,
+                    "progress": _discovery.result.progress,
+                    "status": _discovery.result.status,
+                    "object_count": _discovery.result.object_count,
+                })
+            await asyncio.sleep(1)
+
+        # Resume sniffer
+        if sniffer_was_running and _sniffer:
+            try:
+                await _sniffer.start()
+                logger.info("[Discovery] Sniffer resumed")
+            except Exception as exc:
+                logger.error("[Discovery] Failed to resume sniffer: %s", exc)
+
+        # Broadcast final result
+        if _discovery.result:
+            await _broadcast({
+                "type": "discovery_done",
+                "mac": mac,
+                "result": _discovery.result.to_dict(),
+            })
+
+    asyncio.create_task(_wait_and_resume())
+    return {"status": "started", "mac": mac}
+
+
+@app.get("/api/discover/status")
+async def discovery_status() -> dict:
+    """Get current discovery status and results."""
+    if _discovery.result:
+        return _discovery.result.to_dict()
+    return {"status": "idle"}
+
+
+@app.get("/api/discover/csv")
+async def discovery_csv() -> Any:
+    """Download discovery results as CSV."""
+    from fastapi.responses import Response
+    if not _discovery.result or not _discovery.result.points:
+        raise HTTPException(status_code=404, detail="No discovery data")
+    csv_data = _discovery.result.to_csv()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=io_mapping_mac{_discovery.result.mac}.csv"}
+    )
 
 
 @app.post("/api/scan")

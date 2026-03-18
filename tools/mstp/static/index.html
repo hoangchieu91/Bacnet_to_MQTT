@@ -248,6 +248,105 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
 .cmp-tbl th{text-align:left;padding:8px 10px;background:var(--surface2);color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
 .cmp-tbl td{padding:7px 10px;border-top:1px solid var(--border);}
 .cmp-tbl tr:hover td{background:#1a2136;}
+
+/* PCAP Capture Button */
+.btn-capture {
+  background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  cursor: pointer; padding: 4px 10px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; gap: 6px; transition: all 0.2s; margin-left: 8px;
+}
+.btn-capture:hover { background: var(--border); }
+.btn-capture.recording {
+  background: rgba(239, 68, 68, 0.1); color: #ef4444; border-color: #ef4444;
+  animation: pulse-red 2s infinite;
+}
+@keyframes pulse-red {
+  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+/* Live Packet Inspector Drawer */
+.inspector-drawer {
+  position: fixed; bottom: 0; left: 0; right: 0; height: 0;
+  background: var(--surface); border-top: 2px solid var(--accent);
+  box-shadow: 0 -5px 20px rgba(0,0,0,0.5);
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden; z-index: 1000; display: flex; flex-direction: column;
+}
+.inspector-drawer.open { height: 45vh; }
+.inspector-header {
+  padding: 10px 20px; background: var(--surface2); border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.inspector-body { padding: 15px 20px; overflow-y: auto; flex: 1; font-family: monospace; }
+.insp-hex-line { display: flex; gap: 15px; padding: 4px 0; font-size: 13px; }
+.insp-offset { color: var(--muted); width: 40px; text-align: right; user-select: none; }
+.insp-bytes { display: flex; gap: 6px; color: #fff; flex-wrap: wrap; flex: 1; }
+.hex-byte { padding: 2px 4px; border-radius: 3px; cursor: default; }
+.hex-byte:hover { filter: brightness(1.3); outline: 1px solid #fff; }
+
+/* Byte semantic colors */
+.hb-pre { background: #d946ef; color: #fff; }  /* Preamble */
+.hb-typ { background: #3b82f6; color: #fff; }  /* Frame Type */
+.hb-dst { background: #10b981; color: #fff; }  /* Dest MAC */
+.hb-src { background: #059669; color: #fff; }  /* Src MAC */
+.hb-len { background: #f59e0b; color: #fff; }  /* Length */
+.hb-hcrc { background: #ef4444; color: #fff; } /* Header CRC */
+.hb-data { background: #475569; color: #fff; } /* Data/APDU */
+.hb-dcrc { background: #b91c1c; color: #fff; } /* Data CRC */
+
+.legend-box { display: flex; gap: 12px; margin-bottom: 15px; flex-wrap: wrap; font-size: 11px; }
+.legend-item { display: flex; align-items: center; gap: 4px; }
+.legend-color { width: 12px; height: 12px; border-radius: 2px; }
+
+/* Discovery Modal */
+.disc-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7); z-index: 2000; display: none;
+  justify-content: center; align-items: center;
+}
+.disc-overlay.open { display: flex; }
+.disc-modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  width: 90vw; max-width: 900px; max-height: 80vh; display: flex; flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.disc-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.disc-header h3 { margin: 0; font-size: 16px; }
+.disc-body { padding: 20px; overflow-y: auto; flex: 1; }
+.disc-footer {
+  padding: 12px 20px; border-top: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center; font-size: 12px;
+}
+.disc-progress {
+  width: 100%; height: 6px; background: var(--surface2); border-radius: 3px; margin: 10px 0;
+}
+.disc-progress-bar {
+  height: 100%; background: var(--accent); border-radius: 3px;
+  transition: width 0.5s ease; width: 0%;
+}
+.disc-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.disc-table th {
+  text-align: left; padding: 8px 10px; background: var(--surface2);
+  color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  position: sticky; top: 0; z-index: 1;
+}
+.disc-table td { padding: 6px 10px; border-top: 1px solid var(--border); }
+.disc-table tr:hover td { background: #1a2136; }
+.btn-discover {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff;
+  border: none; cursor: pointer; padding: 6px 14px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; transition: all 0.2s;
+}
+.btn-discover:hover { filter: brightness(1.15); transform: translateY(-1px); }
+.btn-discover:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+.btn-csv {
+  background: var(--green); color: #fff; border: none; cursor: pointer;
+  padding: 5px 12px; border-radius: 4px; font-size: 11px; font-weight: 600;
+}
+
 </style>
 </head>
 <body>
@@ -263,6 +362,9 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
     <a class="nav-link" href="#" onclick="window.open(location.protocol+'//'+location.hostname+':8766','_blank')">
       <span class="nav-status" id="nsModbus"></span>Modbus RTU</a>
   </div>
+  <button id="btnPcap" class="btn-capture" onclick="togglePcap()">
+    <span class="pcap-icon">⏺</span> <span id="lblPcap">Start PCAP</span>
+  </button>
   <button class="btn btn-sm" onclick="triggerScan()" style="margin-left:8px;">⟳ Scan</button>
 </header>
 
@@ -789,6 +891,41 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
   </div>
 </div>
 
+<div id="inspectorDrawer" class="inspector-drawer">
+  <div class="inspector-header">
+    <h3 id="inspTitle">Live Packet Inspector</h3>
+    <button class="btn btn-sm" onclick="closeInspector()">✕</button>
+  </div>
+  <div class="inspector-body" id="inspBody">
+    <!-- Content goes here -->
+  </div>
+</div>
+
+<!-- Discovery Modal -->
+<div id="discOverlay" class="disc-overlay" onclick="if(event.target===this)closeDiscovery()">
+  <div class="disc-modal">
+    <div class="disc-header">
+      <h3 id="discTitle">🔍 Auto-Discovery</h3>
+      <button class="btn btn-sm" onclick="closeDiscovery()">✕</button>
+    </div>
+    <div class="disc-body" id="discBody">
+      <div id="discProgress" style="display:none;">
+        <div style="text-align:center;margin:20px 0;">
+          <div style="font-size:40px;margin-bottom:10px;">📡</div>
+          <div id="discStatusText" style="font-size:14px;color:var(--text);">Scanning...</div>
+          <div id="discObjCount" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
+        </div>
+        <div class="disc-progress"><div class="disc-progress-bar" id="discBar"></div></div>
+      </div>
+      <div id="discResults" style="display:none;"></div>
+    </div>
+    <div class="disc-footer" id="discFooter">
+      <span id="discInfo"></span>
+      <button class="btn-csv" id="btnCsvExport" onclick="window.location.href='/api/discover/csv'" style="display:none;">📥 Export CSV</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ─────────────────────────────────────────────────────────────────────
 const state = { nodes:{}, selected:null, mode:'offline', eventFilter:null };
@@ -946,6 +1083,8 @@ function connect(){
       }
     } else if(msg.type==='conversation'){
       addConversation(msg);
+    } else if(msg.type==='discovery_progress' || msg.type==='discovery_done'){
+      handleDiscoveryWS(msg);
     }
     renderGrid();
   };
@@ -1101,6 +1240,12 @@ function renderDetail(id){
     html += `</div></div>`;
   }
 
+  // Discover button
+  html += `<div style="margin:12px 0;">
+    <button class="btn-discover" onclick="event.stopPropagation();startDiscovery(${id})">🔍 Discover Points</button>
+    <span style="font-size:10px;color:var(--muted);margin-left:8px;">Quét Object List (tạm dừng Sniffer ~30s)</span>
+  </div>`;
+
   // Quick help
   html += `<div class="detail-section"><div class="detail-section-title">Giải thích</div>
     <div style="font-size:10px;color:var(--muted);line-height:1.6">
@@ -1152,6 +1297,8 @@ function renderFilteredEvents(){
     ? _allEvents
     : _allEvents.filter(ev => ev._nodes && ev._nodes.includes(state.eventFilter));
   filtered.slice(0, 60).forEach(ev => feed.appendChild(ev._el.cloneNode(true)));
+  updateFilterBar();
+  renderFilteredEvents();
 }
 
 function updateFilterBar(){
@@ -1206,6 +1353,7 @@ function addPathologyEvent(ev){
 
 // ── Bus Conversations ────────────────────────────────────────────────────────
 let _allConversations = [];
+let _visibleConversations = [];
 let _convPaused = false;
 
 function addConversation(msg) {
@@ -1220,6 +1368,7 @@ function addConversation(msg) {
         last.count = (last.count || 1) + 1;
         last.ts = msg.ts;
         if (msg.value) last.value = msg.value;
+        if (msg.raw_hex) last.raw_hex = msg.raw_hex;
         renderConversations();
         return;
       }
@@ -1271,8 +1420,10 @@ function renderConversations() {
   document.getElementById('convCounter').textContent = `${filtered.length}/${_allConversations.length} messages`;
 
   const visible = filtered.slice(0, 200);
+  _visibleConversations = visible;
   let html = '';
-  for (const c of visible) {
+  for (let i = 0; i < visible.length; i++) {
+    const c = visible[i];
     const svcClass = _getSvcClass(c);
     const time = c.ts ? new Date(c.ts * 1000).toLocaleTimeString() : '';
     const arrow = c.pdu_type === 'ComplexAck' || c.pdu_type === 'SimpleAck' ? '←' : '→';
@@ -1285,7 +1436,7 @@ function renderConversations() {
     };
     const icon = pduIcons[c.pdu_type] || '•';
 
-    html += `<div class="conv-row">
+    html += `<div class="conv-row" onclick="inspectPacket(${i})" style="cursor:pointer;" title="Click to inspect raw packet">
       <span class="conv-ts">${time}</span>
       <span>${icon}</span>
       <span class="conv-src">MAC ${c.src}</span>
@@ -1326,6 +1477,145 @@ function toggleConvPause() {
   _convPaused = !_convPaused;
   document.getElementById('convPauseBtn').textContent = _convPaused ? '▶' : '⏸';
   document.getElementById('convPauseBtn').title = _convPaused ? 'Resume' : 'Pause';
+}
+// ── Live Packet Inspector ──────────────────────────────────────────────────────
+function inspectPacket(idx) {
+  const c = _visibleConversations[idx];
+  if (!c || !c.raw_hex) {
+    alert("Raw payload is not available for this packet.");
+    return;
+  }
+  const hex = c.raw_hex;
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(hex.substring(i, i + 2).toUpperCase());
+  }
+  
+  let html = `<div class="legend-box">
+    <div class="legend-item"><div class="legend-color hb-pre"></div> Preamble</div>
+    <div class="legend-item"><div class="legend-color hb-typ"></div> Frame Type</div>
+    <div class="legend-item"><div class="legend-color hb-dst"></div> Dest MAC</div>
+    <div class="legend-item"><div class="legend-color hb-src"></div> Src MAC</div>
+    <div class="legend-item"><div class="legend-color hb-len"></div> Length</div>
+    <div class="legend-item"><div class="legend-color hb-hcrc"></div> Header CRC</div>
+    <div class="legend-item"><div class="legend-color hb-data"></div> BACnet APDU</div>
+    <div class="legend-item"><div class="legend-color hb-dcrc"></div> Data CRC</div>
+  </div>`;
+  
+  html += '<div class="insp-hex-line"><div class="insp-offset">0000</div><div class="insp-bytes">';
+  
+  for (let i = 0; i < bytes.length; i++) {
+    let cls = '';
+    if (i < 2) cls = 'hb-pre';
+    else if (i === 2) cls = 'hb-typ';
+    else if (i === 3) cls = 'hb-dst';
+    else if (i === 4) cls = 'hb-src';
+    else if (i === 5 || i === 6) cls = 'hb-len';
+    else if (i === 7) cls = 'hb-hcrc';
+    else if (i >= 8 && i < bytes.length - 2) cls = 'hb-data';
+    else cls = 'hb-dcrc';
+    
+    html += `<span class="hex-byte ${cls}" title="Byte ${i}">${bytes[i]}</span>`;
+    
+    if ((i + 1) % 16 === 0 && i !== bytes.length - 1) {
+      const offset = (i + 1).toString(16).padStart(4, '0').toUpperCase();
+      html += `</div></div><div class="insp-hex-line"><div class="insp-offset">${offset}</div><div class="insp-bytes">`;
+    }
+  }
+  html += '</div></div>';
+  
+  html += `<div style="margin-top:20px; color:#cbd5e1; border-top:1px solid var(--border); padding-top:10px;">
+    <strong>Decoded Info:</strong><br>
+    <div style="font-size:12px; margin-top:6px;">
+      <span style="color:#94a3b8">PDU Type:</span> ${c.pdu_type||'-'} |
+      <span style="color:#94a3b8">Service:</span> ${c.service||'-'} |
+      <span style="color:#94a3b8">Object:</span> ${c.object||'-'} |
+      <span style="color:#94a3b8">Property:</span> ${c.property||'-'}
+    </div>
+    ${c.value ? `<div style="font-size:12px; margin-top:4px;"><span style="color:#94a3b8">Value:</span> <span style="color:var(--yellow)">${c.value}</span></div>` : ''}
+  </div>`;
+  
+  document.getElementById('inspTitle').textContent = `Raw Inspector — MAC ${c.src} → MAC ${c.dst}`;
+  document.getElementById('inspBody').innerHTML = html;
+  document.getElementById('inspectorDrawer').classList.add('open');
+}
+
+function closeInspector() {
+  document.getElementById('inspectorDrawer').classList.remove('open');
+}
+
+// ── Auto-Discovery ────────────────────────────────────────────────────────────
+async function startDiscovery(mac) {
+  if (!mac && mac !== 0) { alert("No MAC selected"); return; }
+  const overlay = document.getElementById('discOverlay');
+  const prog = document.getElementById('discProgress');
+  const results = document.getElementById('discResults');
+  const bar = document.getElementById('discBar');
+  
+  overlay.classList.add('open');
+  prog.style.display = 'block';
+  results.style.display = 'none';
+  document.getElementById('btnCsvExport').style.display = 'none';
+  document.getElementById('discStatusText').textContent = `Scanning MAC ${mac}... (Sniffer paused)`;
+  document.getElementById('discObjCount').textContent = '';
+  document.getElementById('discInfo').textContent = '';
+  document.getElementById('discTitle').textContent = `🔍 Auto-Discovery — MAC ${mac}`;
+  bar.style.width = '0%';
+
+  try {
+    await fetch(`/api/discover/${mac}`, {method: 'POST'});
+  } catch(e) {
+    document.getElementById('discStatusText').textContent = 'Error: ' + e.message;
+  }
+}
+
+function closeDiscovery() {
+  document.getElementById('discOverlay').classList.remove('open');
+}
+
+function handleDiscoveryWS(msg) {
+  if (msg.type === 'discovery_progress') {
+    document.getElementById('discBar').style.width = msg.progress + '%';
+    document.getElementById('discStatusText').textContent = 
+      msg.status === 'running' ? `Scanning MAC ${msg.mac}...` : msg.status;
+    if (msg.object_count > 0) {
+      document.getElementById('discObjCount').textContent = `Found ${msg.object_count} objects`;
+    }
+  } else if (msg.type === 'discovery_done') {
+    const r = msg.result;
+    document.getElementById('discProgress').style.display = 'none';
+    document.getElementById('discResults').style.display = 'block';
+    
+    if (r.status === 'error') {
+      document.getElementById('discResults').innerHTML = 
+        `<div style="color:var(--red);text-align:center;padding:20px;">❌ ${r.error}</div>`;
+      return;
+    }
+
+    let html = `<div style="margin-bottom:12px;color:var(--muted);font-size:12px;">
+      Device ${r.device_instance || '?'} | Vendor ${r.vendor_id || '?'} | ${r.points.length} objects | ${r.duration_s}s
+    </div>`;
+    
+    html += '<table class="disc-table"><thead><tr>';
+    html += '<th>Type</th><th>Instance</th><th>Name</th><th>Description</th><th>Unit</th><th>Value</th>';
+    html += '</tr></thead><tbody>';
+    
+    for (const p of r.points) {
+      html += `<tr>
+        <td><b>${p.object_type_name}</b></td>
+        <td>${p.instance}</td>
+        <td>${p.name || '—'}</td>
+        <td style="color:var(--muted)">${p.description || '—'}</td>
+        <td>${p.unit || '—'}</td>
+        <td style="color:var(--yellow)">${p.present_value != null ? p.present_value : '—'}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    
+    document.getElementById('discResults').innerHTML = html;
+    document.getElementById('discInfo').textContent = `${r.points.length} points discovered`;
+    document.getElementById('btnCsvExport').style.display = 'inline-block';
+  }
 }
 
 // ── Sniffer Tab ───────────────────────────────────────────────────────────────
@@ -1604,6 +1894,46 @@ async function init(){
     _snifferPollTimer = setInterval(pollSnifferNodes, 5000);
   }
 }
+
+// ── PCAP Capture ──────────────────────────────────────────────────────────────
+let isPcapCapturing = false;
+async function togglePcap() {
+  const btn = document.getElementById('btnPcap');
+  const lbl = document.getElementById('lblPcap');
+  
+  if (!isPcapCapturing) {
+    try {
+      await fetch('/api/capture/start', {method: 'POST'});
+      isPcapCapturing = true;
+      btn.classList.add('recording');
+      lbl.textContent = 'Stop Capture...';
+    } catch(e) {
+      console.error(e);
+      alert("Failed to start PCAP capture");
+    }
+  } else {
+    try {
+      btn.classList.remove('recording');
+      lbl.textContent = 'Saving...';
+      const res = await fetch('/api/capture/stop', {method: 'POST'}).then(r=>r.json());
+      isPcapCapturing = false;
+      lbl.textContent = 'Start PCAP';
+      
+      if (res.count > 0) {
+        window.location.href = '/api/capture/download';
+      } else {
+        alert("0 frames captured. Bus might be offline.");
+      }
+    } catch(e) {
+      console.error(e);
+      alert("Failed to stop PCAP capture");
+      isPcapCapturing = false;
+      btn.classList.remove('recording');
+      lbl.textContent = 'Start PCAP';
+    }
+  }
+}
+
 init();
 </script>
 </body>
