@@ -405,6 +405,19 @@ def discover_device(
                 # Phase 2: Parse objectList[N] (single OID)
                 if phase['obj_count'] is not None and not phase['obj_list_done']:
                     oid = _parse_single_oid_ack(frame.data)
+                    # Fallback: use parse_read_property_ack's value_raw (4-byte OID hex)
+                    if oid is None:
+                        ack = parse_read_property_ack(frame.data)
+                        if ack and ack.get('property') == 'objectList':
+                            raw = ack.get('value_raw', '')
+                            if len(raw) == 8:  # 4 bytes = 8 hex chars
+                                try:
+                                    oid_int = int(raw, 16)
+                                    obj_type = (oid_int >> 22) & 0x3FF
+                                    instance = oid_int & 0x3FFFFF
+                                    oid = (obj_type, instance)
+                                except ValueError:
+                                    pass
                     if oid:
                         obj_type, inst = oid
                         type_name = EXTENDED_OBJ_NAMES.get(obj_type, f"type_{obj_type}")
