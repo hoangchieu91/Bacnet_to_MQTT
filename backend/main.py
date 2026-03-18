@@ -648,6 +648,116 @@ async def mstp_read(mac: int, device_instance: int, object_type: str,
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+@app.post("/api/mstp/write")
+async def mstp_write(mac: int, device_instance: int, object_type: str,
+                     object_instance: int, value: Any, priority: int = 16):
+    """Write a value to an MS/TP device."""
+    if not mstp_service or not mstp_service.connected:
+        return JSONResponse({"error": "MS/TP service not connected"}, status_code=503)
+    try:
+        success = await mstp_service.write_object(
+            mac=mac, device_instance=device_instance,
+            object_type=object_type, object_instance=object_instance,
+            value=value, priority=priority,
+        )
+        return {"success": success, "mac": mac, "device_instance": device_instance}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/mstp/discover-and-map")
+async def mstp_discover_and_map(
+    mac: int,
+    device_instance: int,
+    objects: list[dict] | None = None,
+):
+    """Create PointMappings for an MS/TP device.
+
+    Provide `objects` list, each: {"object_type": "analogValue", "object_instance": 1, "label": "..."}
+    """
+    if not objects:
+        return JSONResponse(
+            {"error": "Provide objects list — auto-discovery via objectList not yet supported for MS/TP"},
+            status_code=400)
+
+    # Register device MAC in mstp service cache
+    if mstp_service:
+        from backend.mstp_service import MstpDevice
+        mstp_service._devices[mac] = MstpDevice(mac=mac, device_instance=device_instance)
+
+    created = []
+    prefix = config_manager.config.mqtt.topic_prefix
+    for obj in objects:
+        ot = obj.get("object_type", "analogValue")
+        oi = obj.get("object_instance", 0)
+        label = obj.get("label", f"{ot}:{oi}")
+        mapping_id = f"mstp_{device_instance}_{ot}_{oi}"
+
+        # Skip if already exists
+        if any(m.id == mapping_id for m in config_manager.mappings):
+            created.append({"id": mapping_id, "status": "exists"})
+            continue
+
+        pm = PointMapping(
+            id=mapping_id,
+            device_id=device_instance,
+            object_type=ot,
+            object_instance=oi,
+            mqtt_topic=f"{prefix}/device/{device_instance}/{ot}/{oi}/value",
+            poll_interval=config_manager.config.bacnet.default_poll_interval,
+            read_mode="poll",
+            transport="mstp",
+            enabled=True,
+            label=label,
+            group=f"MSTP-MAC{mac}",
+        )
+        config_manager.add_mapping(pm)
+        created.append({"id": mapping_id, "status": "created"})
+
+    config_manager.save()
+    return {"device_instance": device_instance, "mac": mac,
+            "mappings": created, "total": len(created)}
+
+
+@app.post("/api/mstp/enable")
+async def mstp_enable():
+    """Enable MS/TP and start the service at runtime (no restart needed)."""
+    global mstp_service
+    cfg = config_manager.config.mstp
+    if mstp_service and mstp_service.connected:
+        return {"status": "already_connected", "port": cfg.port}
+
+    config_manager.config.mstp.enabled = True
+    config_manager.save()
+
+    try:
+        from backend.mstp_service import MstpBacnetService
+        mstp_service = MstpBacnetService(
+            port=cfg.port, baudrate=cfg.baudrate, mac=cfg.mac,
+        )
+        await mstp_service.start()
+        if gateway_engine:
+            gateway_engine._mstp = mstp_service
+        return {"status": "started", "connected": mstp_service.connected, "port": cfg.port}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/mstp/disable")
+async def mstp_disable():
+    """Disable MS/TP and stop the service."""
+    global mstp_service
+    config_manager.config.mstp.enabled = False
+    config_manager.save()
+
+    if mstp_service:
+        await mstp_service.stop()
+        if gateway_engine:
+            gateway_engine._mstp = None
+        mstp_service = None
+    return {"status": "stopped"}
+
+
 # ═══════════════════════════════════════════════
 # REST API — BACnet Discovery & Read/Write
 # ═══════════════════════════════════════════════
