@@ -456,6 +456,7 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
         <span>💬 Bus Conversations — BACnet APDU Decoder</span>
         <div style="display:flex;gap:6px;align-items:center">
           <span class="conv-counter" id="convCounter">0 messages</span>
+          <button class="btn btn-sm" onclick="exportConvCSV()" title="Export CSV" style="font-size:10px;padding:2px 8px">📥 CSV</button>
           <button class="btn btn-sm" onclick="clearConversations()" style="font-size:10px;padding:2px 8px">🗑</button>
           <button class="btn btn-sm" id="convPauseBtn" onclick="toggleConvPause()" style="font-size:10px;padding:2px 8px">⏸</button>
         </div>
@@ -476,6 +477,15 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
           <option value="Who-Is">Who-Is</option>
         </select>
         <input type="text" id="convSearch" placeholder="🔍 Search..." oninput="renderConversations()" style="width:120px">
+        <label style="font-size:10px;display:flex;align-items:center;gap:3px;cursor:pointer;margin-left:4px;white-space:nowrap;">
+          <input type="checkbox" id="convHideWhoIs" checked onchange="renderConversations()" style="margin:0;"> Ẩn Who‑Is
+        </label>
+        <label style="font-size:10px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;">
+          <input type="checkbox" id="convHideWhoHas" checked onchange="renderConversations()" style="margin:0;"> Ẩn Who‑Has
+        </label>
+        <label style="font-size:10px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;margin-left:auto;">
+          <input type="checkbox" id="convAutoScroll" onchange="_convAutoScroll=this.checked" style="margin:0;"> Auto‑scroll
+        </label>
       </div>
       <div class="conv-feed" id="convFeed">
         <div style="font-size:11px;color:var(--muted);padding:20px;text-align:center">
@@ -1458,6 +1468,7 @@ function addPathologyEvent(ev){
 let _allConversations = [];
 let _visibleConversations = [];
 let _convPaused = false;
+let _convAutoScroll = false;
 
 function addConversation(msg) {
   if (_convPaused) return;
@@ -1482,17 +1493,19 @@ function addConversation(msg) {
   while (_allConversations.length > 60000) _allConversations.pop();
   renderConversations();
   // Update node filter dropdown
+  _ensureConvNodeOption(msg.src);
+  _ensureConvNodeOption(msg.dst);
+}
+
+function _ensureConvNodeOption(mac) {
+  if (mac == null) return;
   const sel = document.getElementById('convNodeFilter');
-  const existing = new Set([...sel.options].map(o => o.value));
-  [msg.src, msg.dst].forEach(mac => {
-    if (mac != null && !existing.has(String(mac))) {
-      const opt = document.createElement('option');
-      opt.value = String(mac);
-      const n = state.nodes[mac];
-      opt.textContent = n && n.device_ids?.length ? `MAC ${mac} (Dev ${n.device_ids[0]})` : `MAC ${mac}`;
-      sel.appendChild(opt);
-    }
-  });
+  if ([...sel.options].some(o => o.value === String(mac))) return;
+  const opt = document.createElement('option');
+  opt.value = String(mac);
+  const n = state.nodes[mac];
+  opt.textContent = n && n.device_ids?.length ? `MAC ${mac} (Dev ${n.device_ids[0]})` : `MAC ${mac}`;
+  sel.appendChild(opt);
 }
 
 function renderConversations() {
@@ -1500,29 +1513,31 @@ function renderConversations() {
   const nodeFilter = document.getElementById('convNodeFilter').value;
   const svcFilter = document.getElementById('convSvcFilter').value;
   const search = document.getElementById('convSearch').value.toLowerCase();
+  const hideWhoIs = document.getElementById('convHideWhoIs')?.checked;
+  const hideWhoHas = document.getElementById('convHideWhoHas')?.checked;
 
   let filtered = _allConversations;
+  // Hide Who-Is / Who-Has
+  if (hideWhoIs) filtered = filtered.filter(c => c.service !== 'Who-Is');
+  if (hideWhoHas) filtered = filtered.filter(c => c.service !== 'Who-Has');
+  // Node filter
   if (nodeFilter) {
     const mac = parseInt(nodeFilter);
-    // Smart filter: exclude broadcasts (dst=255 Who-Is/Who-Has) when filtering specific node
-    filtered = filtered.filter(c => {
-      if (c.src === mac || c.dst === mac) return true;
-      // Include broadcasts FROM this node
-      if (c.src === mac && c.dst === 255) return true;
-      // Exclude other broadcasts (Who-Is/Who-Has from other nodes)
-      return false;
-    });
+    filtered = filtered.filter(c => c.src === mac || c.dst === mac);
   }
   if (svcFilter) {
     filtered = filtered.filter(c => c.service && c.service.includes(svcFilter));
   }
   if (search) {
-    filtered = filtered.filter(c => c.summary && c.summary.toLowerCase().includes(search));
+    filtered = filtered.filter(c => (c.summary||'').toLowerCase().includes(search)
+      || (c.object||'').toLowerCase().includes(search)
+      || (c.property||'').toLowerCase().includes(search)
+      || (c.value||'').toLowerCase().includes(search));
   }
 
-  document.getElementById('convCounter').textContent = `${filtered.length}/${_allConversations.length} messages`;
+  document.getElementById('convCounter').textContent = `${filtered.length}/${_allConversations.length} msgs`;
 
-  const visible = filtered.slice(0, 200);
+  const visible = filtered.slice(0, 300);
   _visibleConversations = visible;
   let html = '';
   for (let i = 0; i < visible.length; i++) {
@@ -1532,7 +1547,6 @@ function renderConversations() {
     const arrow = c.pdu_type === 'ComplexAck' || c.pdu_type === 'SimpleAck' ? '←' : '→';
     const arrowColor = c.pdu_type === 'Error' || c.pdu_type === 'Reject' ? 'color:#f43f5e' : '';
 
-    // PDU type prefix icon
     const pduIcons = {
       'ConfirmedReq': '📤', 'UnconfirmedReq': '📡', 'SimpleAck': '✅',
       'ComplexAck': '📥', 'Error': '❌', 'Reject': '⛔', 'Abort': '🚫'
@@ -1556,6 +1570,33 @@ function renderConversations() {
     html = '<div style="font-size:11px;color:var(--muted);padding:12px;text-align:center">Chưa có messages phù hợp filter.</div>';
   }
   feed.innerHTML = html;
+  // Auto-scroll to top (newest is first)
+  if (_convAutoScroll) feed.scrollTop = 0;
+}
+
+function exportConvCSV() {
+  const nodeFilter = document.getElementById('convNodeFilter').value;
+  const svcFilter = document.getElementById('convSvcFilter').value;
+  const hideWhoIs = document.getElementById('convHideWhoIs')?.checked;
+  const hideWhoHas = document.getElementById('convHideWhoHas')?.checked;
+  let data = _allConversations;
+  if (hideWhoIs) data = data.filter(c => c.service !== 'Who-Is');
+  if (hideWhoHas) data = data.filter(c => c.service !== 'Who-Has');
+  if (nodeFilter) { const mac = parseInt(nodeFilter); data = data.filter(c => c.src === mac || c.dst === mac); }
+  if (svcFilter) data = data.filter(c => c.service && c.service.includes(svcFilter));
+  if (!data.length) { alert('Không có data để export.'); return; }
+  const header = 'Timestamp,Source,Destination,PDU Type,Service,Object,Property,Value,Count';
+  const rows = data.map(c => {
+    const t = c.ts ? new Date(c.ts * 1000).toISOString() : '';
+    return [t, `MAC ${c.src}`, `MAC ${c.dst}`, c.pdu_type||'', c.service||'',
+            c.object||'', c.property||'', `"${(c.value||'').replace(/"/g,'""')}"`, c.count||1].join(',');
+  });
+  const csv = header + '\n' + rows.join('\n');
+  const blob = new Blob([csv], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mstp_conversations_${new Date().toISOString().slice(0,19).replace(/:/g,'-')}.csv`;
+  a.click(); URL.revokeObjectURL(a.href);
 }
 
 function _getSvcClass(c) {
