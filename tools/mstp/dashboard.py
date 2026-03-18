@@ -492,6 +492,14 @@ async def get_topology() -> dict:
     return _sniffer.analyzer.get_topology()
 
 
+@app.get("/api/timing")
+async def get_timing() -> dict:
+    """Return per-node timing analysis: reply delays, jitter, histogram data."""
+    if not _sniffer:
+        return {"nodes": [], "alerts": []}
+    return _sniffer.analyzer.get_timing_report()
+
+
 # ── Sniffer API ───────────────────────────────────────────────────────────────
 
 @app.get("/api/sniffer/report")

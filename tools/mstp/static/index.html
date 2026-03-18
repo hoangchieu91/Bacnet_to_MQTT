@@ -549,6 +549,30 @@ header h1{font-size:.95rem;font-weight:700;white-space:nowrap;}
     </div>
   </div>
 
+  <!-- Timing & Jitter Analysis -->
+  <div class="card">
+    <div class="card-title" style="display:flex;justify-content:space-between;">
+      <span>⏱️ Protocol Timing & Jitter</span>
+      <button class="btn btn-sm" onclick="loadTiming()">↻ Refresh</button>
+    </div>
+    <div id="timingAlerts" style="margin-bottom:8px;"></div>
+    <div style="overflow-x:auto;">
+      <table class="tbl" style="font-size:11px;">
+        <thead><tr>
+          <th>MAC</th>
+          <th>Reply Delay (avg)</th>
+          <th>Reply P95</th>
+          <th>Reply Max</th>
+          <th>Jitter (σ)</th>
+          <th>Token Hold (avg)</th>
+          <th>Inter-Frame (avg)</th>
+          <th>Histogram</th>
+        </tr></thead>
+        <tbody id="timingBody"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Frame log -->
   <div class="card">
     <div class="card-title">Recent Frames</div>
@@ -1834,7 +1858,60 @@ async function loadSniffer(){
     renderNodeStats(rpt.nodes||[]);
     renderFrameLog(frames);
     loadTopology();  // Also refresh topology
+    loadTiming();    // Also refresh timing
   }catch(e){console.warn('Sniffer fetch failed',e);}
+}
+
+async function loadTiming() {
+  try {
+    const data = await fetch('/api/timing').then(r => r.json());
+    renderTiming(data);
+  } catch(e) { console.warn('Timing fetch failed', e); }
+}
+
+function renderTiming(data) {
+  const body = document.getElementById('timingBody');
+  const alerts = document.getElementById('timingAlerts');
+  if (!body) return;
+
+  // Alerts
+  if (data.alerts && data.alerts.length > 0) {
+    alerts.innerHTML = data.alerts.map(a => {
+      const color = a.type === 'SLOW_REPLY' ? 'var(--red)' : a.type === 'HIGH_JITTER' ? 'var(--yellow)' : 'var(--orange)';
+      return `<div style="padding:6px 10px;background:${color}20;border-left:3px solid ${color};border-radius:4px;margin-bottom:4px;font-size:11px;">
+        <b>⚠ ${a.message}</b><br><span style="color:var(--muted)">${a.detail}</span>
+      </div>`;
+    }).join('');
+  } else {
+    alerts.innerHTML = '<div style="font-size:11px;color:var(--green);">✅ Timing bình thường — không phát hiện jitter bất thường</div>';
+  }
+
+  // Table
+  body.innerHTML = data.nodes.filter(n => n.reply_delay.count > 0 || n.token_hold.count > 0).map(n => {
+    const rd = n.reply_delay;
+    const th = n.token_hold;
+    const ifg = n.inter_frame;
+    
+    // Inline histogram bars
+    const maxH = Math.max(...(n.reply_histogram || []).map(h => h.count), 1);
+    const histBars = (n.reply_histogram || []).map(h => {
+      const pct = (h.count / maxH) * 100;
+      return `<div style="display:inline-block;width:8px;height:${Math.max(pct*0.3,2)}px;background:${rd.p95>250?'var(--red)':'var(--accent)'};margin-right:1px;border-radius:1px;" title="${h.range}ms: ${h.count}"></div>`;
+    }).join('');
+
+    const jColor = rd.jitter > 100 ? 'var(--red)' : rd.jitter > 50 ? 'var(--yellow)' : 'var(--green)';
+    
+    return `<tr>
+      <td><b>${n.mac}</b></td>
+      <td>${rd.count > 0 ? rd.avg + 'ms' : '—'}</td>
+      <td style="color:${rd.p95>250?'var(--red)':'inherit'}">${rd.count > 0 ? rd.p95 + 'ms' : '—'}</td>
+      <td>${rd.count > 0 ? rd.max + 'ms' : '—'}</td>
+      <td style="color:${jColor}">${rd.count > 0 ? rd.jitter + 'ms' : '—'}</td>
+      <td>${th.count > 0 ? th.avg + 'ms' : '—'}</td>
+      <td>${ifg.count > 0 ? ifg.avg + 'ms' : '—'}</td>
+      <td style="white-space:nowrap">${histBars || '—'}</td>
+    </tr>`;
+  }).join('');
 }
 
 function renderSnifferStats(r){

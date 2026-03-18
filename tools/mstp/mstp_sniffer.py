@@ -387,6 +387,11 @@ class NodeStats:
     token_hold_avg_ms: float = 0.0   # avg time between getting token and passing it
     token_hold_max_ms: float = 0.0
 
+    # Timing analysis (Phase 5)
+    reply_delays: list[float] = field(default_factory=list)     # ms: time from request→reply
+    inter_frame_gaps: list[float] = field(default_factory=list)  # ms: gap between consecutive frames from this node
+    last_frame_ts: float = 0.0  # timestamp of last frame from this node
+
 
 @dataclass
 class Pathology:
@@ -448,6 +453,9 @@ class MstpHealthAnalyzer:
         self._conversations: collections.deque[dict] = collections.deque(maxlen=60000)
         self._on_conversation: Callable[[dict], None] | None = None
 
+        # Timing: pending requests awaiting reply: (src,dst) → timestamp
+        self._pending_requests: dict[tuple[int,int], float] = {}
+
     # ── Ingest ─────────────────────────────────────────────────────────────
 
     def ingest_frame(self, frame: MstpFrame) -> None:
@@ -504,6 +512,37 @@ class MstpHealthAnalyzer:
         # BACnet data traffic tracking
         if frame.is_bacnet:
             self._traffic_matrix[(frame.src, frame.dst)] += 1
+
+        # Timing: inter-frame gap for this node
+        if ns.last_frame_ts > 0:
+            gap_ms = (now - ns.last_frame_ts) * 1000
+            ns.inter_frame_gaps.append(gap_ms)
+            if len(ns.inter_frame_gaps) > 200:
+                ns.inter_frame_gaps = ns.inter_frame_gaps[-200:]
+        ns.last_frame_ts = now
+
+        # Timing: reply delay tracking
+        if frame.is_bacnet and len(frame.data) >= 3:
+            pdu_type = (frame.data[2] >> 4) if len(frame.data) > 2 else -1
+            # Check NPDU offset: version + ctrl, skip routing
+            ctrl = frame.data[1] if len(frame.data) > 1 else 0
+            apdu_off = 2
+            if ctrl & 0x20: apdu_off += 4  # DNET+DLEN+hop
+            if ctrl & 0x08: apdu_off += 4  # SNET+SLEN
+            if apdu_off < len(frame.data):
+                pdu_type = (frame.data[apdu_off] >> 4) & 0x0F
+                if pdu_type == 0:  # Confirmed request
+                    self._pending_requests[(frame.src, frame.dst)] = now
+                elif pdu_type in (2, 3):  # SimpleAck or ComplexAck
+                    key = (frame.dst, frame.src)  # original request dir
+                    if key in self._pending_requests:
+                        delay_ms = (now - self._pending_requests[key]) * 1000
+                        src_ns = self._nodes.get(frame.src)
+                        if src_ns:
+                            src_ns.reply_delays.append(delay_ms)
+                            if len(src_ns.reply_delays) > 200:
+                                src_ns.reply_delays = src_ns.reply_delays[-200:]
+                        del self._pending_requests[key]
 
         # BACnet payload analysis (I-Am → extract device instance)
         if frame.is_bacnet and len(frame.data) >= 6:
@@ -871,6 +910,79 @@ class MstpHealthAnalyzer:
         ]
 
         return {"nodes": nodes, "token_ring": token_ring, "traffic": traffic}
+
+    def get_timing_report(self) -> dict:
+        """Return per-node timing analysis: reply delays, inter-frame gaps, jitter."""
+        import statistics
+
+        def _stats(vals: list[float]) -> dict:
+            if not vals:
+                return {"count": 0, "min": 0, "max": 0, "avg": 0, "p95": 0, "jitter": 0}
+            s = sorted(vals)
+            avg = statistics.mean(s)
+            jitter = statistics.stdev(s) if len(s) > 1 else 0
+            p95_idx = int(len(s) * 0.95)
+            return {
+                "count": len(s),
+                "min": round(s[0], 2),
+                "max": round(s[-1], 2),
+                "avg": round(avg, 2),
+                "p95": round(s[min(p95_idx, len(s)-1)], 2),
+                "jitter": round(jitter, 2),
+            }
+
+        def _histogram(vals: list[float], bins: int = 10) -> list[dict]:
+            if not vals:
+                return []
+            mn, mx = min(vals), max(vals)
+            if mx == mn:
+                return [{"range": f"{mn:.1f}", "count": len(vals)}]
+            step = (mx - mn) / bins
+            buckets = [0] * bins
+            for v in vals:
+                idx = min(int((v - mn) / step), bins - 1)
+                buckets[idx] += 1
+            return [
+                {"range": f"{mn + i*step:.1f}-{mn + (i+1)*step:.1f}", "count": c}
+                for i, c in enumerate(buckets)
+            ]
+
+        nodes = []
+        alerts = []
+        for mac, ns in sorted(self._nodes.items()):
+            node_data = {
+                "mac": mac,
+                "reply_delay": _stats(ns.reply_delays),
+                "reply_histogram": _histogram(ns.reply_delays),
+                "inter_frame": _stats(ns.inter_frame_gaps),
+                "token_hold": _stats(ns.token_times),
+                "token_histogram": _histogram(ns.token_times),
+            }
+            nodes.append(node_data)
+
+            # Generate timing alerts
+            rd = node_data["reply_delay"]
+            if rd["count"] > 0 and rd["p95"] > 250:
+                alerts.append({
+                    "mac": mac, "type": "SLOW_REPLY",
+                    "message": f"MAC {mac} phản hồi chậm (P95={rd['p95']:.0f}ms > 250ms)",
+                    "detail": f"avg={rd['avg']:.0f}ms, max={rd['max']:.0f}ms, jitter={rd['jitter']:.0f}ms",
+                })
+            if rd["count"] > 0 and rd["jitter"] > 100:
+                alerts.append({
+                    "mac": mac, "type": "HIGH_JITTER",
+                    "message": f"MAC {mac} jitter cao (σ={rd['jitter']:.0f}ms)",
+                    "detail": "Có thể do EMI, cáp kém, hoặc CPU quá tải",
+                })
+            th = node_data["token_hold"]
+            if th["count"] > 0 and th["max"] > 200:
+                alerts.append({
+                    "mac": mac, "type": "LONG_TOKEN_HOLD",
+                    "message": f"MAC {mac} giữ token quá lâu (max={th['max']:.0f}ms)",
+                    "detail": f"avg={th['avg']:.0f}ms — có thể firmware lỗi hoặc quá tải",
+                })
+
+        return {"nodes": nodes, "alerts": alerts}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
