@@ -1,106 +1,254 @@
-# Tài liệu Bàn giao — BACnet-MQTT Gateway V2
+# Tài Liệu Bàn Giao — BACnet-MQTT Gateway V2
 
-**Phiên bản:** 2.1  
-**Ngày cập nhật:** 2026-03-10  
-**Môi trường deploy:** Ubuntu Server (Raspberry Pi / x86)  
-**Web UI:** `http://<server-ip>:8080` (NGINX)
-
+**Phiên bản:** 2.2
+**Ngày cập nhật:** 2026-03-16
+**Người cập nhật:** nxchieu
 
 ---
 
-## 1. Kiến trúc tổng thể
+## Tóm Tắt Hệ Thống
+
+Hệ thống gồm **1 Ubuntu Server** làm gateway chính và **2 Raspberry Pi** làm bridge MS/TP RS485. Tất cả kết nối từ xa qua **Tailscale VPN**.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Gateway Server                           │
-│                                                                 │
-│  ┌─────────────┐    ┌──────────────────┐    ┌──────────────┐  │
-│  │   NGINX     │    │  FastAPI Backend  │    │  BAC0/       │  │
-│  │  Port 8080  │───►│  Uvicorn:8000    │◄──►│  BACpypes3   │  │
-│  │ (static+    │ /api│ (localhost only) │    │  Port 47808  │  │
-│  │  proxy)     │ /ws │                  │    │  UDP BACnet  │  │
-│  └──────┬──────┘    └──────┬───────────┘    └──────────────┘  │
-│         │                  │                                    │
-│  Serves │          ┌───────▼───────┐                           │
-│  dist/  │          │  SQLite DB    │                           │
-│  (SPA)  │          │  history.db   │                           │
-│         │          └───────────────┘                           │
-│         │                                                       │
-│  ┌──────▼─────────────────────────────────────────────────┐   │
-│  │            WebSocket /ws (proxied via NGINX)             │   │
-│  └─────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
-         │                                          │
-     Port 8080                              BACnet/IP UDP
-     (NGINX)                               BACnet Devices (LAN)
-         │
-         ▼ MQTT Publish
-    MQTT Broker (cloud / local)
-         │
-         ▼ Subscribe
-    SCADA / Home Assistant / Node-RED
+Internet
+    │
+    ├── Tailscale VPN (100.x.x.x)
+    │       ├── Ubuntu Server  100.74.25.27  (bacnet-monitor) ← Web UI + BACnet/IP
+    │       ├── Pi 5           100.x.x.x    (cập nhật)        ← MS/TP RS485
+    │       └── Pi 3           100.x.x.x    (cập nhật)        ← MS/TP RS485
+    │
+    └── OpenVPN (10.212.154.x)
+            └── Ubuntu Server  10.212.154.3
 ```
-
-> **Frontend update** → chỉ rsync `dist/` → NGINX pick up ngay, **không restart service, không gây BACnet disconnect**.
-
 
 ---
 
-## 2. Technology Stack
+## 1. Ubuntu Server — bacnet-monitor
 
-| Layer | Công nghệ | Phiên bản |
-|-------|-----------|-----------|
-| Backend | Python / FastAPI | 3.11+ / 0.110+ |
-| BACnet | BAC0 + BACpypes3 | 22.x + 0.19+ |
-| MQTT | paho-mqtt | 1.6+ |
-| Database | SQLite (WAL mode) | 3.x |
-| Frontend | React + Vite | 18.x + 5.x |
-| CSS | Tailwind CSS | 3.x |
-| Grid | AG-Grid React | 31.x |
-| Charts | Recharts | 2.x |
-| HTTP Server | Uvicorn / NGINX | — |
+### Thông Tin Máy
 
----
+| Thông số | Giá trị |
+| :--- | :--- |
+| Hostname | `bacnet-monitor` |
+| OS | Ubuntu 24.04.4 LTS |
+| CPU | Intel Core i7-6700 @ 3.40GHz |
+| RAM | 1.9 GB |
+| Disk | 29 GB (24% đã dùng — còn ~22 GB) |
+| Python | 3.12.3 |
+| Docker | ❌ Đã gỡ (2026-03-16) |
 
-## 3. Cấu trúc thư mục
+### Truy Cập SSH
+
+```bash
+# Qua Tailscale (khuyến nghị từ xa)
+ssh user@100.74.25.27
+
+# Qua OpenVPN
+ssh user@10.212.154.3
+
+# Qua LAN nội bộ
+ssh user@172.20.24.175
+
+# Password
+Admin@12345
+```
+
+### Địa Chỉ Mạng
+
+| Interface | IP | Mục đích |
+| :--- | :--- | :--- |
+| `ens33` | `172.20.24.175` | LAN văn phòng |
+| `ens38` | `192.168.20.113` | Mạng BACnet/BMS |
+| `tun0` | `10.212.154.3` | OpenVPN |
+| `tailscale0` | `100.74.25.27` | Tailscale |
+
+### Web UI Truy Cập
+
+> **URL:** `http://100.74.25.27:8000`
+
+⚠️ Port là **8000** (uvicorn trực tiếp, không qua NGINX reverse proxy).
+
+### Dịch Vụ Systemd
+
+| Dịch vụ | Port | Lệnh quản lý |
+| :--- | :--- | :--- |
+| `bacnet-gateway` | 8000 | `sudo systemctl restart bacnet-gateway` |
+| `mosquitto` | 1883 | `sudo systemctl restart mosquitto` |
+| `nginx` | 80 | `sudo systemctl restart nginx` |
+
+```bash
+# Xem log realtime
+journalctl -u bacnet-gateway -f
+
+# Xem 50 dòng log gần nhất
+journalctl -u bacnet-gateway -n 50
+
+# Kiểm tra tất cả dịch vụ
+systemctl status bacnet-gateway mosquitto nginx
+```
+
+### Cấu Trúc Thư Mục
 
 ```
-Bacnet_MQTT/
-├── backend/
-│   ├── main.py               ← FastAPI app, tất cả API endpoints
-│   ├── gateway_engine.py     ← Polling loop (RPM batch + single), COV handler
-│   ├── bacnet_service.py     ← BAC0 wrapper: discover, read, write, RPM batch
-│   ├── bacnet_listener.py    ← Broadcast response fix, MSTP address parser
-│   ├── config_manager.py     ← Đọc/ghi runtime_config.json
-│   ├── history_store.py      ← SQLite history, event log, data retention
-│   ├── mqtt_service.py       ← paho-mqtt wrapper
-│   ├── models.py             ← Pydantic data models
-│   ├── device_registry.py    ← Device metadata cache
-│   └── anomaly_engine.py     ← Rule-based anomaly detection
+/home/user/bacnet_mqtt_gateway/
+├── backend/                  ← FastAPI source code
+│   ├── main.py               ← Entry point, tất cả API endpoints
+│   ├── bacnet_service.py     ← BAC0 wrapper
+│   ├── gateway_engine.py     ← Polling loop
+│   ├── history_store.py      ← SQLite history
+│   ├── mqtt_service.py       ← MQTT paho wrapper
+│   └── config_manager.py
 ├── frontend_v2/
-│   ├── src/
-│   │   ├── App.jsx           ← Root, auth context, routing, mobile nav
-│   │   ├── stores/           ← Zustand stores (mapping, device...)
-│   │   └── components/       ← Pages: MappingsPage, DeviceHealthPage...
-│   └── dist/                 ← Build output (served by NGINX)
+│   └── dist/                 ← Build output web (được serve qua uvicorn)
 ├── config/
-│   ├── runtime_config.json   ← BACnet IP, MQTT URL, poll settings
-│   └── discovered_devices.json ← Cache thiết bị đã discover
+│   └── runtime_config.json   ← Cấu hình BACnet IP, MQTT URL
 ├── data/
-│   └── history.db            ← SQLite: point history + event log
-├── docs/                     ← Tài liệu kỹ thuật
-└── scripts/
-    ├── bacnet-gateway.service ← systemd unit for backend
-    ├── bacnet-routes.sh      ← Fix routing khi có Tailscale/VPN
-    ├── deploy-frontend.sh    ← Deploy UI only (no backend restart)
-    ├── deploy-backend.sh     ← Deploy Python code + restart service
-    └── install.sh            ← Fresh install (Ubuntu/Pi)
+│   └── history.db            ← SQLite: lịch sử điểm đo + event log
+├── venv/                     ← Python virtual environment
+└── /etc/systemd/system/bacnet-gateway.service
 ```
 
+### Deploy Cập Nhật Code
+
+```bash
+# SSH vào máy
+ssh user@100.74.25.27
+
+# Vào thư mục dự án
+cd ~/bacnet_mqtt_gateway
+
+# Pull code mới
+git pull
+
+# Nếu có thay đổi Python (backend)
+sudo systemctl restart bacnet-gateway
+
+# Nếu chỉ update frontend (không cần restart backend)
+cd frontend_v2 && npm run build
+# dist/ được serve tự động — không gây BACnet disconnect
+```
 
 ---
 
-## 4. Cấu hình (runtime_config.json)
+## 2. Raspberry Pi 5
+
+### Thông Tin Máy
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| Hostname | `Raspberry-Pi5` |
+| OS | Debian GNU/Linux 13 (Trixie) |
+| CPU | ARM Cortex-A76 quad-core @ 2.4GHz |
+| RAM | 4 GB |
+| Vai trò | **Sub-master Gateway**, Modbus RTU Master, MS/TP Bridge |
+| Tailscale IP | (Chưa cấu hình) |
+| LAN IP | `10.25.7.21` |
+| SSH Username | `pi` |
+| SSH Password | `Raspberry` |
+
+### Khả năng & Vai Trò (Capabilities)
+- **Hiệu năng cao**: Vi xử lý mạnh và RAM 4GB cho phép Pi 5 xử lý lượng dữ liệu lớn, đóng vai trò như một Sub-master Gateway hoặc thậm chí thay thế Ubuntu Server cho các site nhỏ/vừa.
+- **Modbus RTU Master**: Đang gánh vác việc đọc dữ liệu Modbus RTU qua cổng Serial ổn định (`modbus-rtu-tools.service`).
+- **Quản lý đa mạng MS/TP**: Khả năng đọc đồng thời nhiều chuỗi RS485 (qua USB và GPIO) độ trễ thấp, phục vụ số lượng thiết bị > 50 nút.
+- **Đa nhiệm**: Dư sức chạy thêm Mosquitto broker (MQTT) hoặc lưu trữ DB (với thẻ nhớ tốc độ cao/SSD) mà không sợ OOM.
+
+### Kết Nối RS485
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| Serial port | `/dev/ttyAMA0` (UART onboard) hoặc `/dev/ttyUSB0` |
+| Baudrate | 9600 / 38400 (theo thiết bị) |
+| Protocol | BACnet MS/TP |
+
+### Dịch Vụ
+
+```bash
+# Xem log
+journalctl -u mstp-bridge -f
+
+# Restart service
+sudo systemctl restart mstp-bridge
+sudo systemctl status mstp-bridge
+```
+
+### Lưu Ý Pi 5
+
+- Cần **enable UART** trong `/boot/config.txt`: `enable_uart=1`
+- Nếu dùng RS485 hat, kiểm tra driver: `ls /dev/ttyAMA*`
+- GPIO header 40-pin tương thích ngược Pi 3/4
+
+---
+
+## 3. Raspberry Pi 3
+
+### Thông Tin Máy
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| Hostname | `BMS-BACKBACKDOOR` |
+| OS | Debian GNU/Linux 12 (Bookworm) |
+| CPU | ARM Cortex-A53 quad-core @ 1.2GHz |
+| RAM | 1 GB |
+| Vai trò | **Slave/Bridge RS485** từ xa (dự phòng) |
+| Tailscale IP | (Chưa cấu hình) |
+| LAN IP | `10.25.7.22` |
+| SSH Username | `admin` |
+| SSH Password | `Admin@12345` |
+
+### Kết Nối RS485
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| Serial port | `/dev/ttyAMA0` |
+| Baudrate | 9600 / 38400 |
+| Protocol | BACnet MS/TP |
+
+### Dịch Vụ
+
+```bash
+journalctl -u mstp-bridge -f
+sudo systemctl restart mstp-bridge
+```
+
+### Khả năng & Giới hạn Pi 3
+
+- **Khả năng (Phù hợp làm gì)**: Rất tốt cho vai trò **Slave/Bridge RS485 từ xa** (chuyển đổi BACnet MS/TP riêng lẻ hoặc Modbus RTU nhỏ gọn rồi đẩy nhanh lên MQTT Ubuntu/Pi 5).
+- **Giới hạn phần cứng**: Do RAM chỉ 1GB và CPU ARM Cortex-A53 thế hệ cũ, máy sẽ bị quá tải (OOM) nếu load database nội dung lớn, xử lý giao diện React UI liên tục cho nhiều user, hoặc map > 20 thiết bị MS/TP.
+- **Đề xuất**: Chỉ nên dùng để chạy `mstp-bridge` hoặc daemon Python nhẹ (`bacnet-gateway` trỏ MQTT ra xa). Hạn chế lưu DB trực tiếp trên Pi 3 để bảo vệ thẻ nhớ và RAM. Không có USB 3.0, tốc độ đọc thẻ nhớ chậm hơn Pi 5.
+- Nếu lỡ đầy RAM (OOM): `dmesg | grep -i "killed process"`
+
+---
+
+## 4. Kiến Trúc Phần Mềm
+
+```
+┌──────────────────────────────────────────────────┐
+│              Ubuntu Server (bacnet-monitor)       │
+│                                                   │
+│  Browser → :8000 → FastAPI (uvicorn)              │
+│                        │                          │
+│              ┌─────────┴─────────┐                │
+│              │   BAC0 / BACpypes3│                │
+│              │   Port 47808 UDP  │                │
+│              └─────────┬─────────┘                │
+│                        │                          │
+│              ┌─────────┴─────────┐                │
+│              │  SQLite history.db│                │
+│              └───────────────────┘                │
+│                        │                          │
+│              Mosquitto MQTT :1883                  │
+└──────────────────────────────────────────────────┘
+        │ BACnet/IP UDP              │ BACnet/IP
+        ▼ (192.168.20.x)            ▼ (qua LAN)
+  BACnet/IP Devices           Raspberry Pi 5 / Pi 3
+  (Chillers, Meters...)       → RS485 → MS/TP Devices
+                                (Thermostats, FCUs...)
+```
+
+---
+
+## 5. Cấu Hình BACnet & MQTT (runtime_config.json)
 
 ```json
 {
@@ -108,229 +256,131 @@ Bacnet_MQTT/
     "ip": "192.168.20.113",
     "mask": "24",
     "port": 47808,
-    "device_id": 3056882,
+    "device_id": 3056000,
     "route_aware": true,
     "auto_discover": true
   },
   "mqtt": {
-    "url": "mqtt://broker:1883",
+    "url": "mqtt://nxchieu.duckdns.org:54883",
     "username": "",
     "password": "",
-    "topic_prefix": "bacnet",
+    "topic_prefix": "bms/ubuntu_gw",
     "qos": 0
   }
 }
 ```
+*Lưu ý:* Mỗi Node sẽ có một `topic_prefix` riêng biệt (ví dụ: `bms/pi5_gw`, `bms/pi3_gw`, `bms/local_dev`) để không xung đột dữ liệu trên cùng 1 broker.
 
 ---
 
-## 5. Mapping — Point Configuration
+## 6. API Endpoints Quan Trọng
 
-Mỗi mapping = 1 BACnet object muốn publish lên MQTT.
+Base URL: `http://100.74.25.27:8000`
 
-| Trường | Kiểu | Mô tả |
-|--------|------|-------|
-| `label` | string | Tên hiển thị |
-| `device_id` | int | BACnet deviceInstance |
-| `object_type` | string | `analogInput`, `binaryOutput`, `multiStateValue`... |
-| `object_instance` | int | BACnet object instance number |
-| `mqtt_topic` | string | MQTT topic publish (auto nếu để trống) |
-| `read_mode` | `poll`/`cov` | Poll: gateway hỏi định kỳ. COV: device tự push |
-| `poll_interval` | int (s) | Tần suất poll (giây). Không dùng nếu COV |
-| `group` | string | Nhóm để lọc/quản lý |
-| `enabled` | bool | Bật/tắt point |
-
-### Import/Export CSV
-
-```
-Download (↓): Xuất tất cả mappings ra file CSV
-Upload (↑):   Nhập từ CSV hoặc JSON (backward compat)
-```
-
-Định dạng CSV: xem `docs/BACNET_TECHNICAL_GUIDE.md` mục 7.
-
----
-
-## 6. Polling — Chế độ đọc dữ liệu
-
-### COV (Change of Value)
-
-Thay vì gateway poll 10s/lần, device tự **push** khi giá trị thay đổi.
-
-```
-Poll mode:  Gateway → Read every 10s → 6 packets/min/point
-COV mode:   Subscribe → Device pushes ONLY on change → ≈ 0 packets khi stable
-```
-
-**Auto-fallback:** Nếu device từ chối COV 3 lần liên tiếp → tự đổi về Poll.
-
-### ReadPropertyMultiple — Batch Poll (v2.1)
-
-Polling loop tự động **group mappings theo device** và tối ưu:
-
-| Device type | Phương thức | Packets/cycle |
-|-------------|-------------|---------------|
-| BACnet/IP (có `.` trong địa chỉ, ví dụ `192.168.x.x`) | RPM batch (tối đa 20 objects/request) | **1 packet** |
-| MS/TP qua router (ví dụ `8700:20`) | Single-read tuần tự | 1 packet/point |
-
-```
-Ví dụ: Device có 20 points (BACnet/IP)
-  Trước RPM: 20 requests × 3 properties = 60 packets/cycle
-  Sau  RPM:  1 RPM request               =  1 packet/cycle  (↓ ~98%)
-```
-
-Monitor RPM:
-```bash
-journalctl -u bacnet-gateway -f | grep "\[RPM\]"
-# → [RPM] 192.168.20.10:47808: batch-read 12 objects OK
-```
-
-**Auto-fallback:** RPM thất bại → tự switch về single-read từng object.
-
----
-
-## 7. MQTT Topics
-
-```
-{prefix}/{device_id}/{object_type}/{object_instance}/value
-```
-
-Ví dụ:
-```
-bacnet/10121/analogValue/1201/value
-→ {"value": 23.5, "timestamp": "2026-03-10T...", "source": "poll"}
-
-bacnet/10121/binaryOutput/3/value  (COV)
-→ {"value": "active", "source": "cov"}
-
-bacnet/10121/analogInput/5/value   (RPM batch)
-→ {"value": 18.2, "source": "rpm"}
-```
-
-**Command topic (ghi ngược lại BACnet):**
-```
-{prefix}/cmd/{device_id}/{object_type}/{object_instance}/write
-→ {"value": 50.0, "priority": 14}
-```
-
----
-
-## 8. Data Retention (v2.1)
-
-Hệ thống tự xóa dữ liệu cũ theo cấu hình:
-
-| Bảng | Mặc định | Cấu hình tại |
-|------|----------|--------------|
-| `point_history` | **90 ngày** | Settings → System → Data Retention |
-| `event_log` | **180 ngày** | Settings → System → Data Retention |
-
-Cleanup:
-- **Tự động**: mỗi 60 phút (background task)
-- **Thủ công**: Settings → System → "Run Cleanup Now" (hiển thị số records đã xóa + MB freed)
-
-API:
-```
-GET  /api/history/stats    → DB size, total records, retention config
-POST /api/history/cleanup  → trigger manual cleanup, trả về kết quả
-PUT  /api/history/config   → cập nhật retention_days / event_retention_days
-```
-
----
-
-## 9. Service Management (systemd)
-
-```bash
-# Xem log realtime
-journalctl -u bacnet-gateway -f
-
-# Filter logs theo tính năng
-journalctl -u bacnet-gateway -f | grep "\[RPM\]"       # Batch poll
-journalctl -u bacnet-gateway -f | grep "Retention"     # Data cleanup
-journalctl -u bacnet-gateway -f | grep "device_online" # Device status
-
-# Restart
-sudo systemctl restart bacnet-gateway
-
-# Status
-systemctl status bacnet-gateway
-
-# BACnet routing fix (cần khi có Tailscale)
-sudo systemctl restart bacnet-routes
-```
-
----
-
-## 10. API Endpoints quan trọng
-
-### Gateway & System
 | Method | Path | Mô tả |
-|--------|------|-------|
+| :--- | :--- | :--- |
 | GET | `/api/status` | Trạng thái gateway + MQTT |
 | GET | `/api/health` | CPU/RAM/Disk/Temp |
-| GET | `/api/system/services` | Systemd services + port health |
-
-### Mappings
-| Method | Path | Mô tả |
-|--------|------|-------|
-| GET | `/api/mappings` | List tất cả mappings |
-| POST | `/api/mappings` | Tạo mapping mới |
-| PUT | `/api/mappings/{id}` | Update mapping |
-| DELETE | `/api/mappings/{id}` | Xóa mapping |
-| POST | `/api/mappings/bulk-update` | Bulk update nhiều mappings |
-| GET | `/api/mappings/export` | Export CSV |
+| POST | `/api/bacnet/discover` | Quét thiết bị BACnet |
+| GET | `/api/bacnet/devices` | Danh sách thiết bị đã tìm thấy |
+| GET | `/api/mappings` | Danh sách point mappings |
 | POST | `/api/mappings/import` | Import CSV/JSON |
-
-### BACnet
-| Method | Path | Mô tả |
-|--------|------|-------|
-| GET | `/api/bacnet/devices` | List devices đã discover |
-| POST | `/api/bacnet/discover` | Trigger discovery |
-| POST | `/api/bacnet/read` | Đọc một property |
-| POST | `/api/bacnet/write` | Ghi một property |
-
-### Devices & Health
-| Method | Path | Mô tả |
-|--------|------|-------|
-| GET | `/api/devices/health` | Online/offline status + fail count |
-| GET | `/api/devices/{id}/offline-history` | Lịch sử offline + trạng thái hiện tại |
-
-### History & Events
-| Method | Path | Mô tả |
-|--------|------|-------|
-| GET | `/api/history/{id}` | Lịch sử giá trị một point |
-| GET | `/api/history/multi` | Lịch sử nhiều points cùng lúc |
-| GET | `/api/history/stats` | DB size, records, retention config |
-| POST | `/api/history/cleanup` | Manual data cleanup |
-| PUT | `/api/history/config` | Update retention settings |
-| GET | `/api/events` | Event log (filter: type, device, severity, search) |
-| GET | `/api/events/online-chart` | Biểu đồ online/offline events theo giờ |
-
-### Realtime
-| Method | Path | Mô tả |
-|--------|------|-------|
-| WS | `/ws` | WebSocket realtime updates (point_update, alarm, device_online...) |
+| GET | `/api/mappings/export` | Export CSV |
+| GET | `/api/events` | Event log |
+| WS | `/ws` | WebSocket realtime |
 
 ---
 
-## 11. Lưu ý vận hành
+## 7. MQTT Topics (Kiến Trúc Mới)
 
-1. **Đừng chạy 2 instance backend cùng lúc** — xung đột UDP port 47808
-2. **BACnet và gateway phải cùng subnet** (hoặc có BBMD)  
-3. **Tailscale/VPN** can thiệp routing → chạy `bacnet-routes.service`
-4. **COV limit per device** ~20–50 subscriptions; đừng COV hết tất cả points
-5. **Priority 14** là default write — không override điều khiển tự động (priority 1–7)
-6. **RPM chỉ kích hoạt** khi device có >1 point và địa chỉ IP (có dấu `.`); MS/TP an toàn với single-read
-7. **Data Retention**: mặc định history 90 ngày, events 180 ngày — có thể thay đổi tại Settings → System
+Theo quy hoạch, hệ thống đẩy dữ liệu lên qua một Broker chung tại `nxchieu.duckdns.org:54883`.
+
+### Các Topic Prefix
+- `bms/ubuntu_gw`: Dữ liệu từ Ubuntu Server.
+- `bms/pi5_gw`: Dữ liệu từ Pi 5 (MS/TP + Modbus).
+- `bms/pi3_gw`: Dữ liệu từ Pi 3 (Dự phòng).
+- `bms/local_dev`: Máy trạm phát triển nội bộ.
+
+### Cấu trúc Bản tin
+```text
+# Gateway Status (Khởi động hệ thống & LWT)
+{prefix}/status
+→ Ví dụ: bms/pi5_gw/status
+→ Payload (LWT): {"online": false}
+
+# Device Status (Trạng thái thiết bị MS/TP, BACnet)
+{prefix}/device/{device_id}/status
+→ Ví dụ: bms/pi5_gw/device/703/status
+→ Payload: {"online": true, "address": "192.168.1.5"}
+
+# Telemetry (Dữ liệu từ thiết bị)
+{prefix}/device/{device_id}/{object_type}/{object_instance}/value
+→ Ví dụ: bms/pi5_gw/device/703/analogValue/1/value
+→ Payload: {"value": 23.5, "alarm_state": "normal", "timestamp": "2026-03-16T...", "source": "poll"}
+
+# Command (Ra lệnh điều khiển từ xa)
+{prefix}/cmd/device/{device_id}/{object_type}/{object_instance}/write
+→ Ví dụ: bms/pi5_gw/cmd/device/703/analogValue/1/write
+→ Payload: {"value": 50.0, "priority": 14}
+```
+*Mẹo: Để xem dữ liệu toàn hệ thống trên máy tính của bạn, chỉ cần Subscribe vào wildcard `bms/#`.*
+
+> 📖 **Xem thêm:** Hướng dẫn chi tiết cách giám sát, subscribe pattern, script Python monitor, và cách gửi lệnh từ xa: **[MQTT_Monitoring_Guide.md](MQTT_Monitoring_Guide.md)**
 
 ---
 
-## 12. Sự cố thường gặp
+## 8. OpenVPN Server
+
+| Thông số | Giá trị |
+| :--- | :--- |
+| Server | `nxchieu.duckdns.org:54194` |
+| IP nội bộ | `10.25.7.155` |
+
+```bash
+# Tạo client mới
+ssh user@10.25.7.155
+sudo /etc/openvpn/gen-client.sh TenClient
+# File: /etc/openvpn/client/TenClient.ovpn
+```
+
+---
+
+## 9. Lưu Ý Vận Hành
+
+1. **Port Web UI là 8000**, không phải 8080 — đây là nguồn lỗi phổ biến nhất
+2. **Docker đã gỡ** khỏi Ubuntu server (2026-03-16) — dự án chạy trực tiếp qua systemd
+3. **Không chạy 2 instance backend** cùng lúc — xung đột UDP port 47808
+4. **Tailscale/VPN** có thể can thiệp routing BACnet → nếu bị timeout: `sudo ip route add 192.168.20.0/24 dev ens38 table 52`
+5. **Priority 14** cho write BACnet — không override điều khiển tự động (priority 1–7)
+6. **COV limit** ~20–50 subscriptions/device — không COV toàn bộ points
+
+---
+
+## 10. Sự Cố Thường Gặp
 
 | Triệu chứng | Nguyên nhân | Xử lý |
-|-------------|-------------|-------|
-| Device luôn offline dù đang hoạt động | Ping loop dùng name-comparison sai | Đã fix v2.1 (exception-based) |
-| Tab "Offline History" hiện "Still offline" dù online | API không trả current_online | Đã fix v2.1 |
-| BACnet traffic cao | Poll mode, chưa dùng COV/RPM | Bật COV cho points thay đổi thường xuyên; RPM tự kích hoạt với IP |
-| history.db lớn | Chưa cấu hình retention | Settings → System → Data Retention → Save + Run Cleanup |
-| Disconnect sau khi update UI | Deploy sai cách | Dùng `deploy-frontend.sh` (chỉ rsync dist/, không restart service) |
-| BACnet không discover được | Tailscale intercept routing | `sudo systemctl restart bacnet-routes` |
+| :--- | :--- | :--- |
+| Không vào được `http://...:8080` | Sai port | Dùng port **8000** |
+| BACnet unicast timeout | Tailscale chiếm route | `sudo ip route add 192.168.20.0/24 dev ens38 table 52` |
+| Discovery trả về rỗng | Race condition BAC0 | Đã fix: dùng `list()` khi iterate discoveredDevices |
+| Service không start | Port bị chiếm hoặc venv lỗi | `ss -tlnp \| grep 8000` → kill process cũ |
+| Pi 3 OOM crash | Quá nhiều thiết bị | Giảm số lượng MS/TP device, tối đa ~20 |
+| `history.db` to | Chưa cấu hình retention | Settings → System → Data Retention → Run Cleanup |
+
+---
+
+## 11. Checklist Bàn Giao
+
+- [ ] SSH vào Ubuntu server thành công (`user@100.74.25.27`)
+- [ ] Web UI mở được tại `http://100.74.25.27:8000`
+- [ ] BACnet discover thấy thiết bị
+- [ ] MQTT broker kết nối được
+- [ ] SSH vào Pi 5 thành công
+- [ ] SSH vào Pi 3 thành công
+- [ ] MS/TP bridge trên Pi 5/Pi 3 đang active
+- [ ] Tailscale kết nối cả 3 thiết bị
+
+---
+
+*Tài liệu này tổng hợp thông tin thực tế từ hệ thống tính đến 2026-03-16.*
+*Các mục "(cập nhật)" cần bổ sung thông tin Pi 5 và Pi 3 khi có.*

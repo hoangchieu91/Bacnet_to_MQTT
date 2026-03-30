@@ -26,6 +26,7 @@ export const useAuth = () => useContext(AuthContext);
 
 const TOKEN_KEY = 'bacnet_gw_token';
 const USER_KEY  = 'bacnet_gw_user';
+const PAGE_KEY  = 'bacnet_gw_active_page';
 
 /** Fetch wrapper that automatically adds Authorization header */
 export function makeApiFetch(token) {
@@ -91,7 +92,7 @@ function MobileMoreDrawer({ activePage, onNavigate, onClose }) {
 }
 
 function App() {
-  const [page, setPage] = useState('dashboard');
+  const [page, setPage] = useState(() => localStorage.getItem(PAGE_KEY) || 'dashboard');
   const [authChecked, setAuthChecked] = useState(false);
   const [authEnabled, setAuthEnabled] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
@@ -121,6 +122,7 @@ function App() {
 
   const navigate = (p) => {
     setPage(p);
+    localStorage.setItem(PAGE_KEY, p);
     setShowMore(false);
   };
 
@@ -156,7 +158,14 @@ function App() {
 
   const apiFetch = makeApiFetch(token);
 
-  if (!authChecked) return null;
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-bg-primary flex flex-col items-center justify-center gap-4">
+        <div className="w-10 h-10 border-4 border-accent-primary/20 border-t-accent-primary rounded-full animate-spin" />
+        <p className="text-text-muted text-sm font-medium animate-pulse">Initializing Gateway V2...</p>
+      </div>
+    );
+  }
   if (authEnabled && !token) return <LoginPage onLogin={handleLogin} />;
 
   const authCtx = {
@@ -179,7 +188,7 @@ function App() {
 
         {/* Main content */}
         <main
-          className="min-h-screen overflow-x-hidden transition-all duration-300 pb-20 md:pb-0"
+          className="flex flex-col min-h-screen overflow-x-hidden transition-all duration-300 pb-20 md:pb-0"
           style={isMobile ? {} : {
             marginLeft: `${sidebarCollapsed ? 64 : 220}px`,
             width: `calc(100vw - ${sidebarCollapsed ? 64 : 220}px)`,
@@ -200,7 +209,7 @@ function App() {
           {page === 'device-health'  && <DeviceHealthPage />}
           {page === 'mappings'       && <MappingsPage />}
           {page === 'groups'         && <GroupsPage />}
-          {page === 'charts'         && <ChartsPage />}
+          {page === 'charts'         && <div className="flex-1 flex flex-col" style={{ minHeight: 0 }}><ChartsPage /></div>}
           {page === 'logs'           && <LogsPage />}
           {page === 'scheduler'      && <SchedulerPage />}
           {page === 'monitor'        && <MonitorPage />}

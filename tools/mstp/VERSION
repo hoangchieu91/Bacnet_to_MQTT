@@ -1,0 +1,37 @@
+{
+  "version": "1.2.0",
+  "date": "2026-03-17",
+  "changelog": [
+    {
+      "version": "1.2.0",
+      "date": "2026-03-17",
+      "changes": [
+        "Thêm mstp_master.py — Pure Python MS/TP stack (token ring, CRC, NPDU/APDU)",
+        "Thêm mstp_scan_raw.py — Scanner raw không phụ thuộc BAC0",
+        "Thêm mstp_mqtt_bridge.py — Bridge dùng MstpMaster stack",
+        "Cập nhật mstp_sniffer.py — Sửa CRC table, thêm health analysis",
+        "Thêm VERSION file để kiểm soát phiên bản"
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "date": "2026-03-11",
+      "changes": [
+        "scanner.py — BAC0-based scanner with RTT measurement",
+        "bridge.py — Protocol bridge (MS/TP → REST + MQTT)",
+        "health_monitor.py — Continuous bus monitoring + SQLite",
+        "dashboard.py — FastAPI web dashboard",
+        "mstp_sniffer.py — Passive frame sniffer (v1)",
+        "bacnet_file_transfer.py — BACnet file transfer utility",
+        "install.sh + mstp-tools.service — Auto-install script"
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-03-10",
+      "changes": [
+        "Initial release — scanner.py + config.yaml"
+      ]
+    }
+  ]
+}

@@ -1,16 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   ResponsiveContainer, ComposedChart, Line, Bar, Area,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, Brush, ReferenceLine,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceArea,
 } from 'recharts';
 import {
   TrendingUp, Plus, Trash2, Edit3, X, RefreshCw, WifiOff,
   Search, ChevronDown, Copy, BarChart2, Activity, Eye, EyeOff,
-  Settings2, Palette, Ruler, LayoutDashboard,
+  Settings2, LayoutDashboard, ZoomIn, ZoomOut, Move,
 } from 'lucide-react';
 
 const API = '/api';
-const LS_KEY = 'gw_charts_v2';
 
 // ── Color palette ──────────────────────────────────────────────
 const PALETTE = [
@@ -20,14 +19,12 @@ const PALETTE = [
   '#4ade80', '#fb923c', '#38bdf8',
 ];
 
-// ── Chart type options ─────────────────────────────────────────
 const CHART_TYPES = [
   { v: 'line', l: 'Line', icon: Activity },
   { v: 'area', l: 'Area', icon: TrendingUp },
   { v: 'bar',  l: 'Bar',  icon: BarChart2 },
 ];
 
-// ── Time range presets ─────────────────────────────────────────
 const PRESETS = [
   { label: '15m', minutes: 15,    limit: 200  },
   { label: '1h',  minutes: 60,    limit: 300  },
@@ -37,63 +34,65 @@ const PRESETS = [
   { label: '30d', minutes: 43200, limit: 5000 },
 ];
 
-function nowMinus(m) {
-  return new Date(Date.now() - m * 60_000).toISOString();
-}
-
-function uid() {
-  return Math.random().toString(36).slice(2, 10);
-}
+function nowMinus(m) { return new Date(Date.now() - m * 60_000).toISOString(); }
+function uid() { return Math.random().toString(36).slice(2, 10); }
 
 function fmtTs(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleString('vi-VN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
-
 function fmtTsShort(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   return d.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
 }
 
-// ── Load/save charts from localStorage ──────────────────────────
-function loadCharts() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)) || []; }
-  catch { return []; }
-}
-
-function saveCharts(charts) {
-  localStorage.setItem(LS_KEY, JSON.stringify(charts));
-}
-
-// ── Default new chart ───────────────────────────────────────────
 function newChart(name = 'New Chart') {
-  return {
-    id: uid(),
-    name,
-    preset: '1h',
-    live: true,
-    points: [],  // { id, mapping_id, label, color, yAxis: 'left'|'right', type: 'line'|'area'|'bar', visible: true }
-  };
+  return { id: uid(), name, preset: '1h', live: true, points: [] };
+}
+
+// ── API helpers ─────────────────────────────────────────────────
+async function apiGet(path) {
+  const r = await fetch(`${API}${path}`);
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+async function apiPost(path, body) {
+  const r = await fetch(`${API}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+async function apiPut(path, body) {
+  const r = await fetch(`${API}${path}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
+}
+async function apiDelete(path) {
+  const r = await fetch(`${API}${path}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return r.json();
 }
 
 // ── Custom tooltip ──────────────────────────────────────────────
 function CustomTooltip({ active, payload, label, points }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-bg-card/95 border border-border rounded-xl p-3 shadow-2xl text-xs min-w-[180px] backdrop-blur-xl">
-      <p className="text-text-muted mb-2 font-medium border-b border-border/40 pb-1">{fmtTs(label)}</p>
+    <div className="bg-bg-card/90 border border-white/10 rounded-xl p-3.5 shadow-[0_10px_40px_rgba(0,0,0,0.6)] text-xs min-w-[200px] backdrop-blur-2xl ring-1 ring-white/5">
+      <p className="text-text-muted mb-2.5 font-bold tracking-tight border-b border-white/5 pb-1.5 flex justify-between items-center">
+        <span>{fmtTs(label)}</span>
+        <Activity size={10} className="text-accent-primary animate-pulse" />
+      </p>
       {payload.map((entry) => {
         const pt = points?.find(p => p.mapping_id === entry.dataKey);
         return (
-          <div key={entry.dataKey} className="flex items-center justify-between gap-4 mb-1">
-            <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: entry.color }} />
-              <span className="text-text-secondary truncate max-w-[120px]">{pt?.label || entry.name}</span>
+          <div key={entry.dataKey} className="flex items-center justify-between gap-6 mb-2 last:mb-0 group">
+            <span className="flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0 transition-transform group-hover:scale-125" style={{ background: entry.color, boxShadow: `0 0 8px ${entry.color}` }} />
+              <span className="text-text-secondary group-hover:text-white transition-colors truncate max-w-[130px] font-medium">{pt?.label || entry.name}</span>
             </span>
-            <span className="font-bold text-white tabular-nums">
-              {entry.value != null ? Number(entry.value).toFixed(3) : '—'}
+            <span className="font-bold text-white tabular-nums text-sm">
+              {entry.value != null ? Number(entry.value).toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 3 }) : '—'}
             </span>
           </div>
         );
@@ -103,18 +102,16 @@ function CustomTooltip({ active, payload, label, points }) {
 }
 
 // ── Point row in editor ──────────────────────────────────────────
-function PointRow({ pt, mappings, onUpdate, onRemove, idx }) {
+function PointRow({ pt, mappings, onUpdate, onRemove }) {
   const [open, setOpen] = useState(false);
   const m = mappings.find(x => x.id === pt.mapping_id);
+  const SEL = 'w-full px-1 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none';
 
   return (
     <div className="glass-card p-2.5 space-y-2 border border-border/40">
-      {/* Row header */}
       <div className="flex items-center gap-2">
         <span className="w-3 h-3 rounded-full flex-shrink-0 ring-1 ring-white/20" style={{ background: pt.color }} />
-        <span className="flex-1 text-xs font-medium text-white truncate">
-          {pt.label || m?.label || '—'}
-        </span>
+        <span className="flex-1 text-xs font-medium text-white truncate">{pt.label || m?.label || '—'}</span>
         <button onClick={() => setOpen(o => !o)} className="p-1 rounded hover:bg-white/10 text-text-muted hover:text-white transition-all">
           <Settings2 size={12} />
         </button>
@@ -122,20 +119,16 @@ function PointRow({ pt, mappings, onUpdate, onRemove, idx }) {
           <Trash2 size={12} />
         </button>
       </div>
-
       {open && (
         <div className="space-y-2 pt-1 border-t border-border/30">
-          {/* Label */}
           <div>
             <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Label</label>
             <input
               className="w-full px-2 py-1 bg-bg-input border border-border rounded text-xs text-white focus:outline-none focus:border-border-focus"
-              value={pt.label}
-              placeholder={m?.label || 'Auto'}
+              value={pt.label} placeholder={m?.label || 'Auto'}
               onChange={e => onUpdate({ label: e.target.value })}
             />
           </div>
-          {/* Color + Y-axis + Type */}
           <div className="grid grid-cols-3 gap-2">
             <div>
               <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Color</label>
@@ -144,43 +137,31 @@ function PointRow({ pt, mappings, onUpdate, onRemove, idx }) {
                   onChange={e => onUpdate({ color: e.target.value })}
                   className="w-6 h-6 rounded cursor-pointer bg-transparent border border-border"
                 />
-                <select
-                  className="flex-1 px-1 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none"
-                  value={pt.color}
-                  onChange={e => onUpdate({ color: e.target.value })}
-                >
-                  {PALETTE.map(c => (
-                    <option key={c} value={c} style={{ background: c }}>■</option>
-                  ))}
+                <select className="flex-1 px-1 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none"
+                  value={pt.color} onChange={e => onUpdate({ color: e.target.value })}>
+                  {PALETTE.map(c => <option key={c} value={c} style={{ background: c }}>■</option>)}
                 </select>
               </div>
             </div>
             <div>
               <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Y-Axis</label>
-              <select
-                className="w-full px-1 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none"
-                value={pt.yAxis}
-                onChange={e => onUpdate({ yAxis: e.target.value })}
-              >
+              <select className={SEL} value={pt.yAxis || pt.y_axis || 'left'}
+                onChange={e => onUpdate({ yAxis: e.target.value, y_axis: e.target.value })}>
                 <option value="left">Left</option>
                 <option value="right">Right</option>
               </select>
             </div>
             <div>
               <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Type</label>
-              <select
-                className="w-full px-1 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none"
-                value={pt.type}
-                onChange={e => onUpdate({ type: e.target.value })}
-              >
+              <select className={SEL} value={pt.type}
+                onChange={e => onUpdate({ type: e.target.value })}>
                 {CHART_TYPES.map(t => <option key={t.v} value={t.v}>{t.l}</option>)}
               </select>
             </div>
           </div>
-          {/* Visibility */}
           <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={pt.visible !== false} onChange={e => onUpdate({ visible: e.target.checked })}
-              className="rounded" />
+            <input type="checkbox" checked={pt.visible !== false}
+              onChange={e => onUpdate({ visible: e.target.checked })} className="rounded" />
             <span className="text-[10px] text-text-muted">Visible on chart</span>
           </label>
         </div>
@@ -222,7 +203,7 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
         mapping_id: m.id,
         label: m.label || `${m.object_type}:${m.object_instance}`,
         color: PALETTE[colorIdx],
-        yAxis: 'left',
+        yAxis: 'left', y_axis: 'left',
         type: 'line',
         visible: true,
       }],
@@ -256,7 +237,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {/* Name */}
             <div>
               <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Chart Name</label>
               <input
@@ -266,8 +246,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
                 placeholder="e.g. FCU Temperature"
               />
             </div>
-
-            {/* Default time range */}
             <div>
               <label className="text-[10px] text-text-muted uppercase tracking-wider block mb-1">Default Range</label>
               <select className={SEL_CLS} value={form.preset}
@@ -275,8 +253,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
                 {PRESETS.map(p => <option key={p.label} value={p.label}>{p.label}</option>)}
               </select>
             </div>
-
-            {/* Points list */}
             <div>
               <div className="text-[10px] text-text-muted uppercase tracking-wider mb-2 flex items-center justify-between">
                 <span>Points ({form.points.length})</span>
@@ -284,11 +260,7 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
               </div>
               <div className="space-y-2">
                 {form.points.map((pt, idx) => (
-                  <PointRow
-                    key={pt.id}
-                    pt={pt}
-                    idx={idx}
-                    mappings={mappings}
+                  <PointRow key={pt.id} pt={pt} idx={idx} mappings={mappings}
                     onUpdate={upd => updatePoint(idx, upd)}
                     onRemove={() => removePoint(idx)}
                   />
@@ -302,7 +274,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
             </div>
           </div>
 
-          {/* Save */}
           <div className="p-4 border-t border-border">
             <button
               onClick={() => { if (form.name.trim() && form.points.length > 0) onSave(form); }}
@@ -320,7 +291,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
             <p className="text-sm font-bold text-white">Add Points</p>
             <p className="text-xs text-text-muted mt-0.5">Click a point to add it to the chart</p>
           </div>
-
           <div className="p-3 border-b border-border space-y-2">
             <div className="relative">
               <Search size={11} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -338,7 +308,6 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
               </select>
             </div>
           </div>
-
           <div className="flex-1 overflow-y-auto p-3 space-y-1">
             {availableMappings.length === 0 && (
               <p className="text-xs text-text-muted text-center py-8">
@@ -364,24 +333,22 @@ function ChartEditor({ chart, mappings, groups, onSave, onClose }) {
   );
 }
 
-// ── Single chart viewer ──────────────────────────────────────────
-function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
+// ── Chart viewer with zoom/pan ───────────────────────────────────
+function ChartViewer({ chart, mappings, preset, live, customFrom, customTo, loading: globalLoading }) {
   const [chartData, setChartData] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [preset, setPreset] = useState(chart.preset || '1h');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo]   = useState('');
-  const [live, setLive] = useState(chart.live !== false);
-  const [collapsed, setCollapsed] = useState(false);
   const timerRef = useRef(null);
 
-  // Memoize to avoid recreating on every render
+  // ── Zoom/pan state ──
+  const [zoomDomain, setZoomDomain] = useState(null);  // { x1, x2 } ISO strings or null
+  const [isDragging, setIsDragging]   = useState(false);
+  const dragRef = useRef({ startX: null, domain: null });
+
   const visiblePoints = useMemo(
     () => chart.points.filter(p => p.visible !== false),
     [chart.points]
   );
-  const hasRight = useMemo(() => visiblePoints.some(p => p.yAxis === 'right'), [visiblePoints]);
-  // Stable string key — only changes when point IDs actually change
+  const hasRight = useMemo(() => visiblePoints.some(p => (p.yAxis || p.y_axis) === 'right'), [visiblePoints]);
   const visibleIdsKey = visiblePoints.map(p => p.mapping_id).join(',');
 
   const getRange = useCallback(() => {
@@ -393,30 +360,22 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
   }, [preset, customFrom, customTo]);
 
   const buildData = useCallback((seriesMap) => {
-    // Collect all unique timestamps, sorted ascending
     const tsSet = new Set();
     Object.values(seriesMap).forEach(pts => pts.forEach(p => tsSet.add(p.timestamp)));
     const sorted = [...tsSet].sort();
-
-    // Build lookup: mid -> sorted array of {ts, value}
     const byMid = {};
     Object.entries(seriesMap).forEach(([mid, pts]) => {
       byMid[mid] = [...pts].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
     });
-
-    // Forward-fill: for each timestamp, find the most recent value for each series
-    const lastKnown = {}; // mid -> last numeric value
+    const lastKnown = {};
     return sorted.map(ts => {
       const row = { timestamp: ts };
       Object.keys(byMid).forEach(mid => {
-        const pts = byMid[mid];
-        // Find exact or most recent point <= ts
-        const exact = pts.find(p => p.timestamp === ts);
+        const exact = byMid[mid].find(p => p.timestamp === ts);
         if (exact !== undefined) {
           const v = Number(exact.value);
           lastKnown[mid] = isNaN(v) ? lastKnown[mid] : v;
         }
-        // Use forward-filled value if available, else null
         row[mid] = lastKnown[mid] !== undefined ? lastKnown[mid] : null;
       });
       return row;
@@ -438,6 +397,7 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
   }, [visibleIdsKey, getRange, buildData]);
 
   useEffect(() => {
+    setZoomDomain(null);
     fetchData();
     clearInterval(timerRef.current);
     if (live && preset !== 'custom' && !['30d', '7d'].includes(preset)) {
@@ -446,279 +406,511 @@ function ChartViewer({ chart, onEdit, onDelete, onDuplicate, mappings }) {
     return () => clearInterval(timerRef.current);
   }, [fetchData, live, preset]);
 
-  const inputCls = 'px-2 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none focus:border-border-focus';
+  // ── Zoom/Pan logic ──
+  const displayData = useMemo(() => {
+    if (!zoomDomain) return chartData;
+    return chartData.filter(d => d.timestamp >= zoomDomain.x1 && d.timestamp <= zoomDomain.x2);
+  }, [chartData, zoomDomain]);
+
+  const zoomIn = () => {
+    if (chartData.length < 2) return;
+    const all = chartData.map(d => d.timestamp);
+    const [x1, x2] = zoomDomain ? [zoomDomain.x1, zoomDomain.x2] : [all[0], all[all.length - 1]];
+    const span = new Date(x2) - new Date(x1);
+    const midMs = (new Date(x1).getTime() + new Date(x2).getTime()) / 2;
+    const newSpan = span * 0.5;
+    setZoomDomain({ x1: new Date(midMs - newSpan / 2).toISOString(), x2: new Date(midMs + newSpan / 2).toISOString() });
+  };
+  const zoomOut = () => {
+    if (!zoomDomain) return;
+    const span = new Date(zoomDomain.x2) - new Date(zoomDomain.x1);
+    const midMs = (new Date(zoomDomain.x1).getTime() + new Date(zoomDomain.x2).getTime()) / 2;
+    const newSpan = span * 2;
+    const newX1 = new Date(midMs - newSpan / 2).toISOString();
+    const newX2 = new Date(midMs + newSpan / 2).toISOString();
+    const allTs = chartData.map(d => d.timestamp);
+    if (newX1 <= allTs[0] && newX2 >= allTs[allTs.length - 1]) setZoomDomain(null);
+    else setZoomDomain({ x1: newX1, x2: newX2 });
+  };
+  const resetZoom = () => setZoomDomain(null);
+
+  const onWheel = (e) => {
+    const data = zoomDomain ? chartData.filter(d => d.timestamp >= zoomDomain.x1 && d.timestamp <= zoomDomain.x2) : chartData;
+    if (data.length < 2) return;
+    const x1 = new Date(data[0].timestamp).getTime();
+    const x2 = new Date(data[data.length - 1].timestamp).getTime();
+    const span = x2 - x1;
+    const fact = e.deltaY > 0 ? 1.25 : 0.8;
+    const mid = (x1 + x2) / 2;
+    const nX1 = new Date(mid - (span * fact) / 2).toISOString();
+    const nX2 = new Date(mid + (span * fact) / 2).toISOString();
+    setZoomDomain({ x1: nX1, x2: nX2 });
+  };
+  const onMouseDown = (e) => {
+    if (e.button !== 0) return;
+    setIsDragging(true);
+    const dom = zoomDomain ? { x1: new Date(zoomDomain.x1).getTime(), x2: new Date(zoomDomain.x2).getTime() }
+      : chartData.length > 1 ? { x1: new Date(chartData[0].timestamp).getTime(), x2: new Date(chartData[chartData.length - 1].timestamp).getTime() } : null;
+    dragRef.current = { startX: e.clientX, domain: dom };
+    e.preventDefault();
+  };
+  const onMouseMove = (e) => {
+    if (!isDragging || !dragRef.current.domain) return;
+    const { startX, domain } = dragRef.current;
+    const shift = -((e.clientX - startX) / 800) * (domain.x2 - domain.x1);
+    setZoomDomain({ x1: new Date(domain.x1 + shift).toISOString(), x2: new Date(domain.x2 + shift).toISOString() });
+  };
+  const onMouseUp = () => setIsDragging(false);
 
   return (
-    <div className="glass-card flex flex-col">
-      {/* Chart header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border/40">
-        <button onClick={() => setCollapsed(c => !c)} className="p-1 rounded hover:bg-white/8 text-text-muted hover:text-white transition-all">
-          <ChevronDown size={14} className={`transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-        </button>
-        <span className="font-semibold text-white text-sm flex-1 truncate">{chart.name}</span>
-        <span className="text-[10px] text-text-muted">{chart.points.length} pt{chart.points.length !== 1 && 's'}</span>
-        {loading && <RefreshCw size={12} className="animate-spin text-text-muted" />}
-
-        {/* Live */}
-        <button onClick={() => setLive(l => !l)}
-          className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium transition-all ${live ? 'text-green-400 bg-green-500/10' : 'text-text-muted hover:text-white'}`}>
-          {live ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />Live</> : <><WifiOff size={10} />Paused</>}
-        </button>
-
-        {/* Actions */}
-        <button onClick={onEdit} className="p-1.5 rounded hover:bg-white/8 text-text-muted hover:text-white transition-all"><Edit3 size={13} /></button>
-        <button onClick={onDuplicate} className="p-1.5 rounded hover:bg-white/8 text-text-muted hover:text-white transition-all"><Copy size={13} /></button>
-        <button onClick={onDelete} className="p-1.5 rounded hover:bg-error/15 text-text-muted hover:text-error transition-all"><Trash2 size={13} /></button>
+    <div className="flex flex-col h-full bg-bg-card/30 rounded-xl border border-white/5 overflow-hidden">
+      {/* Mini header for individual zoom */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/20">
+        <span className="text-[10px] font-bold text-white uppercase truncate flex-1">{chart.name}</span>
+        <div className="flex items-center gap-0.5">
+          <button onClick={zoomIn} className="p-1 rounded hover:bg-white/5 text-text-muted"><ZoomIn size={10} /></button>
+          <button onClick={zoomOut} className="p-1 rounded hover:bg-white/5 text-text-muted"><ZoomOut size={10} /></button>
+          <button onClick={resetZoom} className="p-1 rounded hover:bg-white/5 text-[10px] text-text-muted">⟲</button>
+          <button onClick={fetchData} className="p-1 rounded hover:bg-white/5 text-text-muted">
+            <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
-      {!collapsed && (
-        <>
-          {/* Time range bar */}
-          <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-border/30 bg-bg-input/20">
-            {PRESETS.map(p => (
-              <button key={p.label} onClick={() => setPreset(p.label)}
-                className={`px-2.5 py-0.5 rounded text-[10px] font-medium transition-all ${
-                  preset === p.label ? 'bg-accent-primary text-white' : 'text-text-muted hover:text-white hover:bg-white/8'
-                }`}>
-                {p.label}
-              </button>
-            ))}
-            <button onClick={() => setPreset('custom')}
-              className={`px-2.5 py-0.5 rounded text-[10px] font-medium transition-all ${
-                preset === 'custom' ? 'bg-accent-primary text-white' : 'text-text-muted hover:text-white hover:bg-white/8'
-              }`}>
-              Custom
-            </button>
-            {preset === 'custom' && (
-              <div className="flex items-center gap-1">
-                <input type="datetime-local" className={inputCls} value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
-                <span className="text-text-muted text-[10px]">→</span>
-                <input type="datetime-local" className={inputCls} value={customTo} onChange={e => setCustomTo(e.target.value)} />
-              </div>
-            )}
-            <button onClick={fetchData} className="ml-auto p-1 rounded hover:bg-white/8 text-text-muted hover:text-white transition-all">
-              <RefreshCw size={11} className={loading ? 'animate-spin' : ''} />
-            </button>
+      <div className="flex-1 p-2 min-h-0 relative">
+        {/* Subtle background glow */}
+        <div className="absolute inset-0 bg-radial-[at_50%_40%] from-accent-primary/2 to-transparent opacity-50 pointer-events-none" />
+        
+        {chart.points.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-text-muted relative z-10">
+            <TrendingUp size={48} className="opacity-10 mb-4" />
+            <p className="text-sm font-medium">No points added to this chart</p>
+            <p className="text-xs mt-1 opacity-60">Click Edit to add points from the registry</p>
           </div>
-
-          {/* Chart body */}
-          <div className="p-4">
-            {chart.points.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
-                <TrendingUp size={40} className="opacity-20 mb-3" />
-                <p className="text-sm">No points added</p>
-                <button onClick={onEdit} className="mt-2 text-xs text-accent-primary hover:underline">+ Edit chart to add points</button>
-              </div>
-            ) : chartData.length === 0 && !loading ? (
-              <div className="flex flex-col items-center justify-center py-12 text-text-muted">
-                <p className="text-sm">No data in this time range</p>
-                <p className="text-xs mt-1">Try expanding the range</p>
-              </div>
-            ) : (
-              <div style={{ height: 300 }}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={chartData} margin={{ top: 5, right: hasRight ? 60 : 12, left: 0, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                    <XAxis
-                      dataKey="timestamp"
-                      tickFormatter={fmtTsShort}
-                      tick={{ fontSize: 9, fill: '#64748b' }}
-                      tickLine={false}
-                      axisLine={{ stroke: 'rgba(255,255,255,0.06)' }}
-                      minTickGap={50}
-                    />
-                    {/* Left Y-axis */}
-                    <YAxis
-                      yAxisId="left"
-                      orientation="left"
-                      tick={{ fontSize: 9, fill: '#64748b' }}
-                      tickLine={false}
-                      axisLine={false}
-                      width={46}
-                    />
-                    {/* Right Y-axis (only if needed) */}
-                    {hasRight && (
-                      <YAxis
-                        yAxisId="right"
-                        orientation="right"
-                        tick={{ fontSize: 9, fill: '#64748b' }}
-                        tickLine={false}
-                        axisLine={false}
-                        width={46}
-                      />
-                    )}
-                    <Tooltip content={<CustomTooltip points={chart.points} />} />
-                    <Legend
-                      wrapperStyle={{ fontSize: 10, paddingTop: 8 }}
-                      formatter={(value) => {
-                        const pt = chart.points.find(p => p.mapping_id === value);
-                        return <span style={{ color: '#94a3b8' }}>{pt?.label || value}</span>;
-                      }}
-                    />
-                    <Brush
-                      dataKey="timestamp"
-                      height={20}
-                      stroke="rgba(255,255,255,0.1)"
-                      fill="rgba(255,255,255,0.02)"
-                      tickFormatter={fmtTsShort}
-                      travellerWidth={5}
-                    />
-                    {visiblePoints.map((pt) => {
-                      // Use stepAfter for binary-type points (on/off signals)
-                      const mapping = mappings.find(m => m.id === pt.mapping_id);
-                      const isBinary = mapping && (mapping.object_type || '').toLowerCase().includes('binary');
-                      const lineType = isBinary ? 'stepAfter' : 'monotone';
-                      const props = {
-                        key: pt.id,
-                        dataKey: pt.mapping_id,
-                        name: pt.mapping_id,
-                        yAxisId: pt.yAxis || 'left',
-                        stroke: pt.color,
-                        fill: pt.color,
-                        strokeWidth: 2,
-                        connectNulls: true,
-                        type: lineType,
-                        dot: false,
-                        activeDot: { r: 3 },
-                      };
-                      if (pt.type === 'area') return (
-                        <Area {...props} fillOpacity={0.12} />
-                      );
-                      if (pt.type === 'bar') return (
-                        <Bar key={pt.id} dataKey={pt.mapping_id} name={pt.mapping_id}
-                          yAxisId={pt.yAxis || 'left'} stroke={pt.color} fill={pt.color}
-                          opacity={0.8} radius={[2, 2, 0, 0]} />
-                      );
-                      return (
-                        <Line {...props} />
-                      );
-                    })}
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+        ) : chartData.length === 0 && !loading ? (
+          <div className="flex flex-col items-center justify-center h-full text-text-muted relative z-10">
+            <WifiOff size={40} className="opacity-10 mb-4" />
+            <p className="text-sm">No sequence data found in range</p>
+            <p className="text-xs mt-1">Try expanding the window or enabling Live mode</p>
           </div>
+        ) : (
+          <div
+            className="w-full h-full relative z-10"
+            style={{ cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' }}
+            onWheel={onWheel}
+            onMouseDown={onMouseDown}
+            onMouseMove={onMouseMove}
+            onMouseUp={onMouseUp}
+            onMouseLeave={onMouseUp}
+            onDoubleClick={resetZoom}
+          >
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={displayData} margin={{ top: 15, right: hasRight ? 65 : 15, left: 10, bottom: 5 }}>
+                <defs>
+                  {visiblePoints.map(pt => (
+                    <filter key={`glow-${pt.id}`} id={`glow-${pt.id}`} x="-20%" y="-20%" width="140%" height="140%">
+                      <feGaussianBlur stdDeviation="1.5" result="blur" />
+                      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                    </filter>
+                  ))}
+                  <linearGradient id="gridGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="rgba(255,255,255,0.01)" />
+                    <stop offset="50%" stopColor="rgba(255,255,255,0.05)" />
+                    <stop offset="100%" stopColor="rgba(255,255,255,0.01)" />
+                  </linearGradient>
+                </defs>
 
-          {/* Point legend below chart */}
-          {chart.points.length > 0 && (
-            <div className="px-4 pb-3 flex flex-wrap gap-2">
-              {chart.points.map(pt => (
-                <div key={pt.id} className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                  pt.visible !== false ? 'border-border/50 text-text-secondary' : 'border-border/20 text-text-muted opacity-50'
-                }`}>
-                  <span className="w-2 h-2 rounded-full" style={{ background: pt.color }} />
-                  <span className="truncate max-w-[80px]">{pt.label}</span>
-                  <span className="text-text-muted opacity-60">{pt.yAxis === 'right' ? '→R' : '→L'}</span>
-                </div>
-              ))}
+                <CartesianGrid strokeDasharray="4 4" stroke="url(#gridGradient)" vertical={false} />
+                
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={fmtTsShort}
+                  tick={{ fontSize: 10, fill: 'var(--color-text-muted)', fontWeight: 500 }}
+                  tickLine={false}
+                  axisLine={{ stroke: 'var(--color-text-muted)', strokeOpacity: 0.15 }}
+                  minTickGap={60}
+                  interval="preserveStartEnd"
+                />
+                
+                <YAxis yAxisId="left" orientation="left"
+                  tick={{ fontSize: 10, fill: 'var(--color-text-muted)', fontWeight: 600 }} 
+                  tickLine={false} axisLine={false} width={45} 
+                  domain={['auto', 'auto']}
+                />
+                
+                {hasRight && (
+                  <YAxis yAxisId="right" orientation="right"
+                    tick={{ fontSize: 10, fill: 'var(--color-text-muted)', fontWeight: 600 }} 
+                    tickLine={false} axisLine={false} width={45}
+                    domain={['auto', 'auto']}
+                  />
+                )}
+
+                <Tooltip content={<CustomTooltip points={chart.points} />} />
+                
+                {visiblePoints.map((pt) => {
+                  const mapping = mappings.find(m => m.id === pt.mapping_id);
+                  const isBinary = mapping && (mapping.object_type || '').toLowerCase().includes('binary');
+                  const lineType = isBinary ? 'stepAfter' : 'monotone';
+                  const yAxisId = pt.yAxis || pt.y_axis || 'left';
+                  
+                  const props = {
+                    key: pt.id,
+                    dataKey: pt.mapping_id,
+                    name: pt.mapping_id,
+                    yAxisId,
+                    stroke: pt.color,
+                    strokeWidth: 2.5,
+                    connectNulls: true,
+                    type: lineType,
+                    dot: false,
+                    activeDot: { r: 5, fill: pt.color, stroke: 'white', strokeWidth: 2 },
+                    filter: `url(#glow-${pt.id})`,
+                  };
+
+                  if (pt.type === 'area') return (
+                    <Area {...props} fill={`url(#grad-${pt.id})`} fillOpacity={0.08}>
+                      <defs>
+                        <linearGradient id={`grad-${pt.id}`} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor={pt.color} stopOpacity={0.3} />
+                          <stop offset="100%" stopColor={pt.color} stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                    </Area>
+                  );
+                  
+                  if (pt.type === 'bar') return (
+                    <Bar key={pt.id} dataKey={pt.mapping_id} name={pt.mapping_id}
+                      yAxisId={yAxisId} fill={pt.color}
+                      opacity={0.85} radius={[3, 3, 0, 0]} 
+                      style={{ filter: `blur(0.5px)` }}
+                    />
+                  );
+                  
+                  return <Line {...props} />;
+                })}
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* Point legend */}
+      {chart.points.length > 0 && (
+        <div className="px-4 pb-3 flex flex-wrap gap-2 flex-shrink-0">
+          {chart.points.map(pt => (
+            <div key={pt.id} className={`flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+              pt.visible !== false ? 'border-border/50 text-text-secondary' : 'border-border/20 text-text-muted opacity-50'
+            }`}>
+              <span className="w-2 h-2 rounded-full" style={{ background: pt.color }} />
+              <span className="truncate max-w-[80px]">{pt.label}</span>
+              <span className="text-text-muted opacity-60">{(pt.yAxis || pt.y_axis) === 'right' ? '→R' : '→L'}</span>
             </div>
-          )}
-        </>
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-// ── Main page ───────────────────────────────────────────────────
+// ── Main page — 2-panel layout ───────────────────────────────────
 export function ChartsPage() {
-  const [charts, setCharts] = useState(() => loadCharts());
-  const [mappings, setMappings] = useState([]);
-  const [groups, setGroups] = useState([]);
-  const [editingChart, setEditingChart] = useState(null);  // chart obj or null
-  const [isCreating, setIsCreating] = useState(false);
+  const [charts, setCharts]           = useState([]);
+  const [mappings, setMappings]       = useState([]);
+  const [groups, setGroups]           = useState([]);
+  const [selectedIds, setSelectedIds] = useState([]);
+  
+  // Shared time controls
+  const [preset, setPreset] = useState('1h');
+  const [live, setLive] = useState(true);
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
 
-  // Persist on change
-  useEffect(() => { saveCharts(charts); }, [charts]);
+  const [editingChart, setEditingChart] = useState(null);
+  const [saving, setSaving]             = useState(false);
+  const [loading, setLoading]           = useState(true);
 
-  // Fetch metadata
+  // Load charts from API on mount + Migration logic
   useEffect(() => {
-    Promise.all([
-      fetch(`${API}/mappings`).then(r => r.json()),
-      fetch(`${API}/groups`).then(r => r.json()),
-    ]).then(([m, g]) => {
-      setMappings(m.mappings || []);
-      setGroups(g.groups || []);
-    }).catch(console.error);
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [c, m, g] = await Promise.all([
+          apiGet('/charts'),
+          fetch(`${API}/mappings`).then(r => r.json()),
+          fetch(`${API}/groups`).then(r => r.json()),
+        ]);
+        if (!active) return;
+
+        let loaded = c.charts || [];
+        setMappings(m.mappings || []);
+        setGroups(g.groups || []);
+
+        // ── Migration from localStorage ──
+        const localRaw = localStorage.getItem('charts');
+        if (loaded.length === 0 && localRaw) {
+          try {
+            const localCharts = JSON.parse(localRaw);
+            if (Array.isArray(localCharts) && localCharts.length > 0) {
+              console.log('[Migration] Moving local charts to server...');
+              const migrated = [];
+              for (const lc of localCharts) {
+                // Normalize old format to new format
+                const payload = {
+                  name: lc.name || 'Migrated Chart',
+                  preset: lc.preset || '1h',
+                  live: lc.live !== false,
+                  points: (lc.points || []).map(p => ({
+                    mapping_id: typeof p === 'string' ? p : (p.mapping_id || p.id),
+                    label: p.label || 'Point',
+                    color: p.color || PALETTE[0],
+                    y_axis: p.y_axis || p.yAxis || 'left',
+                    type: p.type || 'line',
+                    visible: p.visible !== false
+                  }))
+                };
+                const res = await apiPost('/charts', payload);
+                migrated.push(res.chart);
+              }
+              loaded = migrated;
+              localStorage.removeItem('charts'); // Clean up
+              console.log('[Migration] Success');
+            }
+          } catch (me) { console.error('Migration failed:', me); }
+        }
+
+        setCharts(loaded);
+        if (loaded.length > 0) setSelectedIds([loaded[0].id]);
+      } catch (e) {
+        console.error('Initial load failed:', e);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; };
   }, []);
 
-  const saveChart = (chart) => {
-    setCharts(prev => {
-      const idx = prev.findIndex(c => c.id === chart.id);
-      if (idx >= 0) {
-        const next = [...prev]; next[idx] = chart; return next;
+
+
+  const saveChart = async (form) => {
+    setSaving(true);
+    try {
+      // Normalize points for backend (map yAxis → y_axis)
+      const payload = {
+        ...form,
+        points: form.points.map(p => ({
+          id: p.id || uid(),
+          mapping_id: p.mapping_id,
+          label: p.label,
+          color: p.color,
+          y_axis: p.yAxis || p.y_axis || 'left',
+          type: p.type || 'line',
+          visible: p.visible !== false,
+        })),
+      };
+
+      const existing = charts.find(c => c.id === form.id);
+      if (existing) {
+        const res = await apiPut(`/charts/${form.id}`, payload);
+        setCharts(prev => prev.map(c => c.id === form.id ? res.chart : c));
+      } else {
+        const res = await apiPost('/charts', payload);
+        const created = res.chart;
+        setCharts(prev => [...prev, created]);
+        setSelectedIds(prev => [...prev, created.id]);
       }
-      return [...prev, chart];
-    });
+    } catch (e) { console.error('Save chart failed:', e); }
+    setSaving(false);
     setEditingChart(null);
-    setIsCreating(false);
   };
 
-  const deleteChart = (id) => {
+  const deleteChart = async (id) => {
     if (!confirm('Delete this chart?')) return;
-    setCharts(prev => prev.filter(c => c.id !== id));
+    try {
+      await apiDelete(`/charts/${id}`);
+      setCharts(prev => {
+        const next = prev.filter(c => c.id !== id);
+        setSelectedIds(curr => curr.filter(x => x !== id));
+        return next;
+      });
+    } catch (e) { console.error(e); }
   };
 
-  const duplicateChart = (chart) => {
+  const duplicateChart = async (chart) => {
     const copy = JSON.parse(JSON.stringify(chart));
-    copy.id = uid();
+    copy.id = '';
     copy.name = `${chart.name} (copy)`;
-    setCharts(prev => [...prev, copy]);
+    try {
+      const res = await apiPost('/charts', copy);
+      setCharts(prev => [...prev, res.chart]);
+      setSelectedIds(prev => [...prev, res.chart.id]);
+    } catch (e) { console.error(e); }
   };
 
-  const startEdit = (chart) => {
-    setEditingChart(JSON.parse(JSON.stringify(chart)));
-    setIsCreating(false);
-  };
-
-  const startCreate = () => {
-    setEditingChart(newChart(`Chart ${charts.length + 1}`));
-    setIsCreating(true);
-  };
+  const startEdit = (chart) => setEditingChart(JSON.parse(JSON.stringify(chart)));
+  const startCreate = () => setEditingChart(newChart(`Chart ${charts.length + 1}`));
 
   return (
-    <div className="p-6 flex flex-col gap-4 min-h-screen">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <TrendingUp size={22} className="text-accent-primary" />
-            Charts
-          </h2>
-          <p className="text-xs text-text-muted mt-0.5">
-            {charts.length} chart{charts.length !== 1 ? 's' : ''} • Multiple points & Y-axes • Persisted locally
-          </p>
-        </div>
-        <button onClick={startCreate}
-          className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-accent-primary to-purple-600 text-white text-sm font-medium rounded-lg shadow-lg hover:-translate-y-0.5 transition-transform">
-          <Plus size={16} /> New Chart
-        </button>
-      </div>
+    <div className="flex h-full" style={{ minHeight: 0 }}>
 
-      {/* Charts list */}
-      {charts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-24 text-text-muted">
-          <LayoutDashboard size={56} className="opacity-20 mb-4" />
-          <p className="text-base font-medium text-text-secondary">No charts yet</p>
-          <p className="text-sm mt-1">Create a chart to start visualizing BACnet points</p>
+      {/* ── LEFT SIDEBAR ── */}
+      <div className="w-56 flex-shrink-0 border-r border-border flex flex-col bg-bg-secondary/50">
+        {/* Sidebar header */}
+        <div className="flex items-center justify-between px-3 py-3 border-b border-border">
+          <span className="text-xs font-bold text-white flex items-center gap-1.5">
+            <TrendingUp size={13} className="text-accent-primary" /> Charts
+          </span>
           <button onClick={startCreate}
-            className="mt-5 flex items-center gap-2 px-5 py-2.5 bg-accent-primary/20 border border-accent-primary/40 text-accent-primary rounded-xl hover:bg-accent-primary/30 transition-all font-medium text-sm">
-            <Plus size={16} /> Create First Chart
+            className="flex items-center gap-1 px-2 py-1 bg-accent-primary/20 border border-accent-primary/40 text-accent-primary rounded-lg text-[10px] font-medium hover:bg-accent-primary/30 transition-all">
+            <Plus size={10} /> New
           </button>
         </div>
-      ) : (
-        <div className="flex flex-col gap-4">
-          {charts.map(chart => (
-            <ChartViewer
-              key={chart.id}
-              chart={chart}
-              mappings={mappings}
-              onEdit={() => startEdit(chart)}
-              onDelete={() => deleteChart(chart.id)}
-              onDuplicate={() => duplicateChart(chart)}
-            />
-          ))}
+
+        {/* Chart list */}
+        <div className="flex-1 overflow-y-auto py-1">
+          {loading && (
+            <div className="flex items-center justify-center py-8">
+              <RefreshCw size={14} className="animate-spin text-text-muted" />
+            </div>
+          )}
+          {!loading && charts.length === 0 && (
+            <div className="px-3 py-6 text-center text-text-muted text-xs">
+              <LayoutDashboard size={24} className="opacity-20 mx-auto mb-2" />
+              No charts yet
+            </div>
+          )}
+          {charts.map(c => {
+            const isSelected = selectedIds.includes(c.id);
+            return (
+              <button
+                key={c.id}
+                onClick={() => {
+                  setSelectedIds(prev => 
+                    prev.includes(c.id) 
+                      ? prev.filter(id => id !== c.id) 
+                      : [...prev, c.id]
+                  );
+                }}
+                className={`w-full text-left px-3 py-3 flex items-center gap-3 text-xs transition-all relative group overflow-hidden ${
+                  isSelected
+                    ? 'bg-accent-primary/10 text-white'
+                    : 'text-text-secondary hover:bg-white/5 border-l-2 border-transparent hover:text-white'
+                }`}
+              >
+                {isSelected && (
+                  <>
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-accent-primary shadow-[0_0_12px_var(--color-accent-primary)]" />
+                    <div className="absolute inset-0 bg-gradient-to-r from-accent-primary/10 to-transparent" />
+                  </>
+                )}
+                <Activity size={12} className={isSelected ? 'text-accent-primary animate-pulse' : 'text-text-muted'} />
+                <span className="flex-1 truncate font-semibold tracking-wide uppercase text-[10px]">{c.name}</span>
+                <span className={`text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 ${isSelected ? 'opacity-100 text-accent-primary border-accent-primary/20' : 'opacity-0 group-hover:opacity-60'} transition-opacity`}>
+                  {c.points?.length || 0}
+                </span>
+              </button>
+            );
+          })}
         </div>
-      )}
+      </div>
+
+      {/* ── RIGHT PANEL ── */}
+      <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {selectedIds.length === 0 ? (
+          /* Empty state */
+          <div className="flex flex-col items-center justify-center h-full text-text-muted">
+            <LayoutDashboard size={56} className="opacity-20 mb-4" />
+            <p className="text-base font-medium text-text-secondary">
+              {charts.length === 0 ? 'No charts yet' : 'Select one or more charts'}
+            </p>
+            <p className="text-sm mt-1">
+              {charts.length === 0
+                ? 'Create a chart to start visualizing BACnet points'
+                : 'Toggle charts in the sidebar to view them in parallel'}
+            </p>
+            <button onClick={startCreate}
+              className="mt-5 flex items-center gap-2 px-5 py-2.5 bg-accent-primary/20 border border-accent-primary/40 text-accent-primary rounded-xl hover:bg-accent-primary/30 transition-all font-medium text-sm">
+              <Plus size={16} /> Create First Chart
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col h-full overflow-hidden">
+            {/* Global controls bar */}
+            <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 border-b border-border/40 bg-bg-secondary/40">
+              <div className="flex gap-1 mr-2">
+                {PRESETS.map(p => (
+                  <button key={p.label} onClick={() => setPreset(p.label)}
+                    className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                      preset === p.label ? 'bg-accent-primary text-white shadow' : 'text-text-muted hover:text-white hover:bg-white/5'
+                    }`}>
+                    {p.label}
+                  </button>
+                ))}
+                <button onClick={() => setPreset('custom')}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                    preset === 'custom' ? 'bg-accent-primary text-white shadow' : 'text-text-muted hover:text-white hover:bg-white/5'
+                  }`}>
+                  Custom
+                </button>
+              </div>
+
+              {preset === 'custom' && (
+                <div className="flex items-center gap-1 mr-4">
+                  <input type="datetime-local" className="px-2 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none" 
+                    value={customFrom} onChange={e => setCustomFrom(e.target.value)} />
+                  <span className="text-text-muted text-[10px]">→</span>
+                  <input type="datetime-local" className="px-2 py-1 bg-bg-input border border-border rounded text-[10px] text-white focus:outline-none" 
+                    value={customTo} onChange={e => setCustomTo(e.target.value)} />
+                </div>
+              )}
+
+              <button onClick={() => setLive(l => !l)}
+                className={`flex items-center gap-2 px-3 py-1 rounded-lg text-[10px] font-bold transition-all border ${
+                  live ? 'text-green-400 bg-green-400/10 border-green-400/20' : 'text-text-muted border-white/10 hover:text-white hover:bg-white/5'
+                }`}>
+                {live ? <><span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" /> Live Mode</> : <><WifiOff size={10} /> Paused</>}
+              </button>
+
+              <div className="ml-auto flex items-center gap-1">
+                <span className="text-[10px] text-text-muted bg-white/5 px-2 py-1 rounded-md border border-white/5 font-medium">
+                  {selectedIds.length} View{selectedIds.length > 1 ? 's' : ''}
+                </span>
+                <button onClick={() => setSelectedIds([])} className="p-1 px-2 rounded-md hover:bg-error/15 text-text-muted hover:text-error text-[10px] transition-all">Clear All</button>
+              </div>
+            </div>
+
+            {/* Grid display */}
+            <div className="flex-1 overflow-y-auto p-4 content-start">
+              <div className={`grid gap-4 ${
+                selectedIds.length === 1 ? 'grid-cols-1 h-full' : 
+                selectedIds.length <= 2 ? 'grid-cols-1 lg:grid-cols-2' : 
+                'grid-cols-1 md:grid-cols-2'
+              }`}>
+                {charts.filter(c => selectedIds.includes(c.id)).map(chart => (
+                  <div key={chart.id} className="h-[400px] flex flex-col relative group">
+                    <ChartViewer
+                      chart={chart}
+                      mappings={mappings}
+                      preset={preset}
+                      live={live}
+                      customFrom={customFrom}
+                      customTo={customTo}
+                    />
+                    {/* Floating chart actions */}
+                    <div className="absolute top-1 right-12 flex opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => startEdit(chart)} className="p-1.5 rounded hover:bg-white/10 text-white transition-all"><Edit3 size={11} /></button>
+                      <button onClick={() => duplicateChart(chart)} className="p-1.5 rounded hover:bg-white/10 text-white transition-all"><Copy size={11} /></button>
+                      <button onClick={() => deleteChart(chart.id)} className="p-1.5 rounded hover:bg-error/20 text-error transition-all"><Trash2 size={11} /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Editor modal */}
       {editingChart && (
@@ -727,7 +919,7 @@ export function ChartsPage() {
           mappings={mappings}
           groups={groups}
           onSave={saveChart}
-          onClose={() => { setEditingChart(null); setIsCreating(false); }}
+          onClose={() => setEditingChart(null)}
         />
       )}
     </div>

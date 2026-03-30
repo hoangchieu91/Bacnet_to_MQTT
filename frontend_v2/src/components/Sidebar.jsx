@@ -61,7 +61,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggle }) {
       {/* Logo + collapse toggle */}
       <div className="px-3 pt-4 pb-3 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2.5 min-w-0">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-primary to-purple-600 flex items-center justify-center shrink-0">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-accent-primary to-sky-600 flex items-center justify-center shrink-0">
             <Zap size={16} className="text-white" />
           </div>
           {!collapsed && (

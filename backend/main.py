@@ -28,6 +28,9 @@ from backend.models import (
     MqttConfig,
     MqttTestRequest,
     MstpConfig,
+    ModbusConfig,
+    ModbusScanRequest,
+    ModbusReadRequest,
     PointMapping,
     ReleaseRequest,
     ScheduleEntry,
@@ -37,6 +40,7 @@ from backend.models import (
     WritePropertyRequest,
     WriteRequest,
 )
+from backend.modbus_service import ModbusService
 from backend.auth_service import (
     hash_password, verify_password, create_token,
     require_auth, require_operator, require_admin,
@@ -67,12 +71,13 @@ scheduler_service: SchedulerService | None = None
 device_registry: DeviceRegistry | None = None
 webhook_service: WebhookService | None = None
 mstp_service = None  # Optional MstpBacnetService
+modbus_service: ModbusService | None = None
 
 
 # ── Lifespan (startup / shutdown) ──────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry, webhook_service, mstp_service
+    global bacnet_service, mqtt_service, gateway_engine, history_store, scheduler_service, device_registry, webhook_service, mstp_service, modbus_service
 
     # Load config
     cfg = config_manager.load()
@@ -105,6 +110,16 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.warning("MS/TP service init failed (non-critical): %s", exc)
             mstp_service = None
+
+    # Initialise Modbus service
+    modbus_service = ModbusService(cfg.modbus)
+    if cfg.modbus.enabled:
+        try:
+            await modbus_service.start()
+            logger.info("Modbus service started: %s @ %d",
+                        cfg.modbus.port, cfg.modbus.baudrate)
+        except Exception as exc:
+            logger.warning("Modbus service init failed (non-critical): %s", exc)
 
     gateway_engine = GatewayEngine(
         config_manager, bacnet_service, mqtt_service, ws_manager,
@@ -152,6 +167,8 @@ async def lifespan(app: FastAPI):
         await bacnet_service.stop()
     if mstp_service:
         await mstp_service.stop()
+    if modbus_service:
+        await modbus_service.stop()
     if history_store:
         history_store.close()
     logger.info("Gateway application shut down.")
@@ -273,7 +290,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # ── Static frontend serving ───────────────────
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def serve_index():
     return FileResponse(FRONTEND_DIR / "index.html")
 
@@ -787,6 +804,89 @@ async def mstp_disable():
         logger.debug("mstp-tools start skipped: %s", e)
 
     return {"status": "stopped"}
+
+
+# ═══════════════════════════════════════════════
+# REST API — Modbus Config & Diagnostics
+# ═══════════════════════════════════════════════
+@app.get("/api/modbus/config")
+async def get_modbus_config():
+    return config_manager.config.modbus.model_dump()
+
+
+@app.put("/api/modbus/config")
+async def update_modbus_config(cfg: ModbusConfig):
+    """Update Modbus serial config. Restart to apply."""
+    config_manager.config.modbus = cfg
+    config_manager.save()
+    return {"status": "updated", "modbus": cfg.model_dump()}
+
+
+@app.get("/api/modbus/status")
+async def get_modbus_status():
+    return {
+        "enabled": config_manager.config.modbus.enabled,
+        "connected": modbus_service._connected if modbus_service else False,
+        "port": config_manager.config.modbus.port,
+        "baudrate": config_manager.config.modbus.baudrate,
+    }
+
+
+@app.get("/api/modbus/health")
+async def get_modbus_health():
+    """Technique 3: Passively analyzed bus health report."""
+    if not modbus_service:
+        return JSONResponse({"error": "Modbus service not initialized"}, status_code=500)
+    return modbus_service.get_health_report()
+
+
+@app.post("/api/modbus/scan/slaves")
+async def modbus_scan_slaves(req: ModbusScanRequest):
+    """Technique 1: High-speed active scanner for Slave IDs."""
+    if not modbus_service or not modbus_service._connected:
+        return JSONResponse({"error": "Modbus service not connected"}, status_code=503)
+    try:
+        found = await modbus_service.scan_slaves()
+        return {"devices": found, "count": len(found)}
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/modbus/scan/registers")
+async def modbus_scan_registers(req: ModbusScanRequest):
+    """Technique 2: Heuristic register map discovery."""
+    if not modbus_service or not modbus_service._connected:
+        return JSONResponse({"error": "Modbus service not connected"}, status_code=503)
+    if req.slave_id is None:
+        return JSONResponse({"error": "Provide slave_id"}, status_code=400)
+    try:
+        end_reg = req.start_reg + req.count - 1
+        result = await modbus_service.scan_registers(
+            req.slave_id, req.fc, req.start_reg, end_reg
+        )
+        return result
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/modbus/read")
+async def modbus_read(req: ModbusReadRequest):
+    """Technique 4: Multi-format diagnostic read & decode."""
+    if not modbus_service or not modbus_service._connected:
+        return JSONResponse({"error": "Modbus service not connected"}, status_code=503)
+    try:
+        res = await modbus_service.read_registers(
+            req.slave_id, req.fc, req.start_reg, req.count, req.byte_order
+        )
+        if res.error:
+            return JSONResponse({"error": res.error}, status_code=400)
+        return {
+            "registers": res.registers,
+            "raw_values": res.raw_values,
+            "response_ms": round(res.response_ms, 1)
+        }
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # ═══════════════════════════════════════════════

@@ -56,7 +56,7 @@ function ServiceHealthPanel() {
     ...data.services.filter(s => ['bacnet-gateway','nginx'].includes(s.name)),
     ...data.ports.filter(p => p.port === 8000 || p.port === 8080),
     data.bacnet_udp,
-  ].every(x => x.ok);
+  ].every(x => x && x.ok);
 
   return (
     <div className="glass-card p-5">
@@ -561,8 +561,8 @@ export function Dashboard() {
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}
               barCategoryGap="30%">
-              <XAxis dataKey="time" tickFormatter={fmtHour} tick={{ fill: '#5a5a75', fontSize: 9 }} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fill: '#5a5a75', fontSize: 9 }} tickLine={false} axisLine={false} allowDecimals={false} />
+              <XAxis dataKey="time" tickFormatter={fmtHour} tick={{ fill: 'var(--color-text-muted)', fontSize: 9 }} tickLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fill: 'var(--color-text-muted)', fontSize: 9 }} tickLine={false} axisLine={false} allowDecimals={false} />
               <Tooltip content={<ChartTooltip />} />
               <Legend wrapperStyle={{ fontSize: 10, color: '#888' }} />
               <Bar dataKey="online" name="Online Events" fill="#22c55e" radius={[3, 3, 0, 0]} maxBarSize={24} />
